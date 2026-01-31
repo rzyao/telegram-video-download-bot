@@ -11,7 +11,7 @@ class Config:
     # 使用 Telegram Desktop 官方 API ID (配合 Windows 伪装，权限最高)
     API_ID = 2040
     API_HASH = "b18441a1ff607e10a989891a5462e627"
-    SESSION_NAME = "ayao_desktop_session"
+    SESSION_NAME = "telethon_session"
     
     # 旧配置备份
     # API_ID = int(os.getenv("TG_API_ID", "36348713"))
@@ -47,8 +47,9 @@ class Config:
     
     # ==================== 下载配置 ====================
     CHUNK_SIZE = 1024 * 1024  # 1MB 每请求块（Telegram API 限制）
-    PART_SIZE = 32 * 1024 * 1024  # 32MB 每并发分片（每个 Worker 负责下载的大小）
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))  # 并发线程数
+    PART_SIZE = 10 * 1024 * 1024  # 10MB 每并发分片（每个 Worker 负责下载的大小）
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))  # 并发线程数
+    WORKER_COUNT = int(os.getenv("WORKER_COUNT", "4")) # 独立客户端池大小 (建议与 MAX_WORKERS 一致或略小)
     MAX_RETRIES = 50          # 单块最大重试次数
     RETRY_DELAY_BASE = 5      # 基础重试间隔（秒）
     RETRY_DELAY_MAX = 60      # 最大重试间隔（秒）

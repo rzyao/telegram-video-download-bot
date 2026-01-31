@@ -1,3 +1,2 @@
-pyrogram>=2.0.0
-tgcrypto
-aiofiles
+telethon
+python-socks[asyncio]
