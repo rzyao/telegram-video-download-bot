@@ -24,7 +24,7 @@
 在项目根目录下，直接运行：
 
 ```bash
-docker-compose up -d
+docker compose up -d --build
 ```
 
 ### 2. 访问控制面板
