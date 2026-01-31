@@ -1,173 +1,272 @@
 """
 Telegram Downloader (Telethon Version)
-基于 Telethon 的下载器，支持受限频道和并发下载
+基于 Telethon 的下载器，支持受限频道并发下载
+架构：延迟初始化 Client，支持动态销毁和重建
 """
 import asyncio
 import logging
+import os
 from telethon import TelegramClient, events
 from config import Config
 from downloader import TelethonDownloader
 
-# 配置日志
+# 配置日志（简化格式避免错误）
 logging.basicConfig(
-    format='%(asctime)s | %(levelname)-7s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    level=Config.LOG_LEVEL
+    level=Config.LOG_LEVEL,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("Main")
-
-# 降低 Telethon 日志级别，避免干扰进度显示
 logging.getLogger('telethon').setLevel(logging.WARNING)
 
-# 适配 Telethon 代理格式
-telethon_proxy = None
-if Config.PROXY:
+# ========== 全局变量（延迟初始化）==========
+client = None
+downloader = None
+client_connected = False
+event_handlers_registered = False
+
+# ========== Getter 函数供 Dashboard 调用 ==========
+def get_client():
+    return client
+
+def get_downloader():
+    return downloader
+
+def get_client_connected():
+    return client_connected
+
+def get_telethon_proxy():
+    """获取 Telethon 格式的代理配置"""
+    if not Config.PROXY:
+        return None
+    
     import python_socks
     scheme = Config.PROXY.get('scheme')
     proxy_type = python_socks.ProxyType.SOCKS5 if scheme == 'socks5' else python_socks.ProxyType.HTTP
-    telethon_proxy = (proxy_type, Config.PROXY['hostname'], Config.PROXY['port'])
+    return (proxy_type, Config.PROXY['hostname'], Config.PROXY['port'])
 
-# 初始化客户端
-client = TelegramClient(
-    Config.SESSION_NAME,  # 使用配置中的 Session 名称
-    Config.API_ID,
-    Config.API_HASH,
-    proxy=telethon_proxy,
-    device_model="Desktop",
-    system_version="Windows 10",
-    app_version="4.16.8 x64",
-    lang_code="en"
-)
-
-# 初始化下载器
-downloader = TelethonDownloader(client)
-
-@client.on(events.NewMessage(chats='me'))
-async def handler(event):
-    """监听收藏夹 (Saved Messages) 的新消息"""
-    message = event.message
+def create_client():
+    """创建新的 Telegram Client（延迟初始化）"""
+    global client, downloader
     
-    # 打印消息基本信息
+    logger.info("🔧 正在创建 Telegram Client...")
+    
+    proxy = get_telethon_proxy()
+    
+    client = TelegramClient(
+        Config.SESSION_NAME,
+        Config.API_ID,
+        Config.API_HASH,
+        proxy=proxy,
+        device_model="Desktop",
+        system_version="Windows 10",
+        app_version="4.16.8 x64",
+        lang_code="en"
+    )
+    
+    downloader = TelethonDownloader(client)
+    
+    logger.info("✅ Client 已创建")
+    return client
+
+async def destroy_client():
+    """销毁 Client 并释放所有资源"""
+    global client, downloader, client_connected, event_handlers_registered
+    
+    logger.info("🔌 正在销毁 Telegram Client...")
+    
+    try:
+        if client:
+            # 移除事件处理器
+            if event_handlers_registered:
+                client.remove_event_handler(message_handler)
+                event_handlers_registered = False
+            
+            # 停止下载器
+            if downloader:
+                await downloader.stop()
+            
+            # 断开连接
+            
+            # 断开连接
+            if client.is_connected():
+                await client.disconnect()
+            
+            # 清空引用
+            client = None
+            downloader = None
+            client_connected = False
+        
+        # 等待文件句柄释放
+        await asyncio.sleep(1)
+        
+        logger.info("✅ Client 已销毁")
+        
+    except Exception as e:
+        logger.error(f"❌ 销毁 Client 失败: {e}")
+
+def ensure_client():
+    """确保 Client 存在，不存在则创建"""
+    global client
+    if client is None:
+        create_client()
+    return client
+
+async def message_handler(event):
+    """消息处理器（收藏夹新消息）"""
+    message = event.message
     logger.info(f"📨 收到消息 ID: {message.id}")
     
-    target_msg = message
-
-    # 0. 检查是否为指令 (仅处理文本消息)
+    # 处理指令
     if message.text and message.text.startswith('/'):
         cmd = message.text.strip().split()[0].lower()
         logger.info(f"🤖 收到指令: {cmd}")
         
         if cmd == '/ping':
-            await message.reply("Pong! 🚀 服务在线")
+            await event.reply("🏓 Pong! Bot 运行正常")
             return
-            
-        if cmd == '/status':
-            status_text = downloader.get_status_text()
-            await message.reply(status_text)
+        elif cmd == '/status':
+            status_info = downloader.get_status_summary()
+            await event.reply(f"📊 下载状态:\n{status_info}")
             return
-            
-        if cmd == '/help':
-            help_text = (
-                "🤖 **Telegram 下载助手**\n\n"
-                "/ping - 检查服务连通性\n"
-                "/status - 查看当前下载任务与队列\n"
-                "/help - 显示此帮助\n\n"
-                "直接转发视频或发送 t.me 链接即可开始下载。"
-            )
-            await message.reply(help_text)
-            return
-    
-    # 检查是否包含媒体
-    if not message.media:
-        # 可能是转发的消息，尝试访问源消息
-        if message.fwd_from:
-            try:
-                # 获取源频道 ID 和消息 ID
-                # Telethon 会自动处理很多细节，但如果是受限频道，我们还是需要尝试获取
-                if message.fwd_from.from_id:
-                    chat_id = message.fwd_from.from_id
-                    msg_id = message.fwd_from.channel_post
-                    
-                    logger.info(f"🔍 检测到转发消息，尝试获取源消息: {chat_id}/{msg_id}")
-                    
-                    # 获取源消息
-                    # Telethon 的 get_messages 处理受限内容比 Pyrogram 强
-                    source_msgs = await client.get_messages(chat_id, ids=msg_id)
-                    if source_msgs and source_msgs.media:
-                        target_msg = source_msgs
-                        logger.info(f"✅ 成功获取源消息媒体: {target_msg.file.mime_type}")
-                    else:
-                        logger.warning("❌ 源消息也没有媒体或无法访问")
-            except Exception as e:
-                logger.error(f"❌ 获取源消息失败: {e}")
-    
-    # 再次检查是否有媒体
-    if target_msg.media:
-        # 过滤类型：只下载视频和文件
-        if target_msg.video or target_msg.document or target_msg.gif:
-            await downloader.add_task(target_msg)
         else:
-            logger.info(f"ℹ️ 忽略非视频/文件媒体: {type(target_msg.media)}")
-            
-    # 如果没有媒体，检查是否包含 t.me 链接
-    elif message.text:
-        import re
-        # 匹配两种格式：
-        # 1. 私有频道: https://t.me/c/12345/678
-        # 2. 公开频道: https://t.me/username/678
-        url_pattern = re.compile(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)")
-        match = url_pattern.search(message.text)
+            await event.reply(f"❓ 未知指令: {cmd}")
+            return
+
+    # 处理转发的媒体
+    if message.fwd_from and message.media:
+        await downloader.add_task(message)
+        return
+
+    # 处理媒体消息
+    if message.media:
+        await downloader.add_task(message)
+        return
+
+    # 处理链接
+    if message.text and ('t.me/' in message.text or 'telegram.me/' in message.text):
+        logger.info("🔗 检测到频道/消息链接")
+        urls = [word for word in message.text.split() if 't.me/' in word or 'telegram.me/' in word]
         
-        if match:
-            private_id, username, msg_id = match.groups()
-            msg_id = int(msg_id)
-            
-            chat_identifier = None
-            if private_id:
-                # 私有频道 ID 通常需要 -100 前缀
-                chat_identifier = int(f"-100{private_id}")
-            else:
-                chat_identifier = username
-                
-            logger.info(f"🔗 检测到链接，尝试从 {chat_identifier} 获取消息 ID: {msg_id}")
-            
+        for url in urls:
             try:
-                # 获取原消息
-                source_msg = await client.get_messages(chat_identifier, ids=msg_id)
-                
-                if source_msg and source_msg.media:
-                    logger.info(f"✅ 成功通过链接获取媒体: {source_msg.file.mime_type}")
-                    # 递归检查（防止获取到的还是链接？通常就是媒体了）
-                    if source_msg.video or source_msg.document or source_msg.gif:
-                        await downloader.add_task(source_msg)
-                    else:
-                        logger.warning("❌ 链接指向的消息不是视频/文件")
-                else:
-                    logger.warning("❌ 链接指向的消息无法访问或无媒体")
+                parts = url.split('/')
+                if len(parts) >= 2:
+                    channel_username = parts[-2]
+                    msg_id = int(parts[-1]) if parts[-1].isdigit() else None
+                    
+                    if msg_id:
+                        logger.info(f"📡 正在从 @{channel_username} 获取消息 {msg_id}")
+                        remote_msg = await client.get_messages(channel_username, ids=msg_id)
+                        
+                        if remote_msg and remote_msg.media:
+                            await downloader.add_task(remote_msg)
+                        else:
+                            logger.warning(f"⚠️ 消息 {msg_id} 无媒体内容")
             except Exception as e:
-                logger.error(f"❌ 通过链接获取消息失败: {e}")
-                
+                logger.error(f"❌ 链接解析失败: {e}")
+        return
     else:
         logger.info("ℹ️ 消息无媒体且无链接")
+
+async def start_telegram_bot():
+    """启动 Telegram Bot（非阻塞）"""
+    global client_connected, event_handlers_registered
+    
+    try:
+        logger.info("🔌 正在连接 Telegram...")
+        
+        # 确保 Client 存在
+        ensure_client()
+        
+        # 连接
+        await client.connect()
+        
+        # 检查认证
+        if not await client.is_user_authorized():
+            logger.warning("⚠️ Telegram Session 未认证或已过期")
+            logger.info("💡 请访问 Dashboard 完成登录")
+            await client.disconnect()
+            client_connected = False
+            return
+        
+        # 已认证，获取用户信息
+        me = await client.get_me()
+        logger.info(f"✅ 已登录: {me.first_name} (@{me.username})")
+        logger.info(f"📂 下载目录: {Config.DOWNLOAD_DIR}")
+        logger.info("💡 请转发视频到 '收藏夹' (Saved Messages) 开始下载")
+        
+        # 注册事件处理器
+        if not event_handlers_registered:
+            client.add_event_handler(message_handler, events.NewMessage(chats='me'))
+            event_handlers_registered = True
+        
+        # 初始化下载器
+        await downloader.initialize_workers()
+        
+        # 恢复未完成的任务
+        await downloader.restore_tasks()
+        
+        client_connected = True
+        
+        # 保持连接
+        await client.run_until_disconnected()
+        
+    except Exception as e:
+        logger.error(f"❌ Telegram Client 启动失败: {e}")
+        logger.warning("⚠️ Telegram 功能不可用，但 Dashboard 仍在运行")
+        logger.info("💡 请访问 Dashboard 检查代理配置或网络设置")
+        client_connected = False
+        if client and client.is_connected():
+            await client.disconnect()
 
 async def main():
     logger.info("🚀 Telegram 下载器 (Telethon版) 启动中...")
     
-    await client.start()
+    # 初始化数据库
+    import database
+    await database.init_db()
+
+    # 无条件启动 Dashboard
+    if Config.ENABLE_DASHBOARD:
+        try:
+            from dashboard import server
+            # 设置全局引用，让 server 可以访问 client
+            import __main__
+            server.main_module = __main__
+            
+            asyncio.create_task(server.run_server())
+            logger.info("🌐 Dashboard 服务已启动")
+            logger.info(f"🌐 访问地址: http://{Config.DASHBOARD_HOST}:{Config.DASHBOARD_PORT}")
+        except ImportError as e:
+            logger.error(f"❌ Dashboard 启动失败 (依赖缺失?): {e}")
+        except Exception as e:
+            logger.error(f"❌ Dashboard 启动出错: {e}")
     
-    me = await client.get_me()
-    logger.info(f"✅ 已登录: {me.first_name} (@{me.username})")
-    logger.info(f"📂 下载目录: {Config.DOWNLOAD_DIR}")
-    logger.info("💡 请转发视频到 '收藏夹' (Saved Messages) 开始下载")
+    # 检查应用状态
+    session_exists = os.path.exists(f"{Config.SESSION_NAME}.session")
     
-    # 初始化下载 Worker 池
-    await downloader.initialize_workers()
+    if not Config.SETUP_COMPLETED:
+        logger.info("📋 首次启动检测到，请访问 Dashboard 完成初始化")
+        logger.info("💡 初始化向导: http://localhost:8000")
+    elif not session_exists:
+        logger.info("🔐 配置已完成，但未检测到 Telegram Session")
+        logger.info("💡 请访问 Dashboard 完成 Telegram 登录")
+    else:
+        # 自动启动 Telegram Bot
+        logger.info("🤖 检测到 Session，正在启动 Telegram Bot...")
+        asyncio.create_task(start_telegram_bot())
     
-    # 保持运行
-    await client.run_until_disconnected()
+    # 保持事件循环运行
+    logger.info("⏳ 主程序运行中，按 Ctrl+C 退出")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 程序已停止")
+        logger.info("👋 收到退出信号，正在关闭...")
+    except Exception as e:
+        logger.error(f"❌ 程序异常退出: {e}")
+        import traceback
+        traceback.print_exc()

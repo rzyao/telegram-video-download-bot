@@ -1,0 +1,12 @@
+[
+  {
+    "name": "dependencies",
+    "description": "Install dependencies",
+    "command": "pip install -r requirements.txt"
+  },
+  {
+    "name": "run",
+    "description": "Run the bot",
+    "command": "python main.py"
+  }
+]

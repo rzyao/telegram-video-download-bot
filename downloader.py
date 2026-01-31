@@ -84,6 +84,10 @@ class DownloadTask:
 
 # ==================== 下载管理器 ====================
 
+import database
+
+# ==================== 下载管理器 ====================
+
 class TelethonDownloader:
     def __init__(self, client: TelegramClient):
         self.client = client
@@ -96,6 +100,9 @@ class TelethonDownloader:
         self.worker_lock = asyncio.Lock()
         self.worker_queue = asyncio.Queue()
         self._session_str = None  # 延迟保存 Session 字符串
+        
+        # 取消信号
+        self.cancel_event = asyncio.Event()
         
         # 确保目录存在
         Config.ensure_directories()
@@ -123,6 +130,7 @@ class TelethonDownloader:
     async def _initialize_workers_internal(self):
         """内部初始化方法"""
         logger.info(f"🔧 正在初始化 {Config.WORKER_COUNT} 个 Worker 客户端...")
+        await database.init_db()
         
         # 导出主客户端 Session
         self._session_str = StringSession.save(self.client.session)
@@ -166,6 +174,28 @@ class TelethonDownloader:
                 logger.info(f"  ✅ Worker {i+1} 重连成功")
             except Exception as e:
                 logger.error(f"  ❌ Worker {i+1} 重连失败: {e}")
+
+                logger.error(f"  ❌ Worker {i+1} 重连失败: {e}")
+
+    async def _cleanup_workers(self):
+        """强制清理所有 Workers (用于取消任务时的硬重置)"""
+        logger.info("🧹 正在强制清理 Worker 连接...")
+        async with self.worker_lock:
+            for w in self.workers:
+                try:
+                    if w.is_connected():
+                        await w.disconnect()
+                except:
+                    pass
+            self.workers = []
+            
+            # 清空队列
+            while not self.worker_queue.empty():
+                try:
+                    self.worker_queue.get_nowait()
+                except:
+                    pass
+            logger.info("✅ Worker 连接已清理")
 
     async def initialize_workers(self):
         """公开的初始化方法（兼容旧调用，但现在是可选的）"""
@@ -260,6 +290,19 @@ class TelethonDownloader:
         except Exception as e:
             logger.error(f"❌ 保存进度失败: {e}")
 
+    async def stop(self):
+        """完全停止下载器"""
+        self.is_running = False
+        self.cancel_event.set()
+        
+        # 保存当前任务状态
+        if self.current_task:
+            logger.info("🛑 正在保存当前任务状态...")
+            self._save_task(self.current_task)
+            
+        # 强制清理 worker 以中断网络连接
+        await self._cleanup_workers()
+            
     async def process_queue(self):
         """处理任务队列"""
         if self.is_running: return
@@ -281,8 +324,14 @@ class TelethonDownloader:
                 task.status = "downloading"
                 self._save_task(task)
                 
+                # 重置取消信号
+                self.cancel_event.clear()
+                
                 # 最终文件路径
                 file_path = os.path.join(Config.DOWNLOAD_DIR, task.file_name)
+                
+                # 使用临时目录存放分片
+                temp_base_path = os.path.join(Config.TEMP_DIR, task.file_name)
                 
                 # 1. 扫描分片状态
                 # 检查哪些分片还没完成
@@ -292,11 +341,12 @@ class TelethonDownloader:
                 
                 for p_data in task.parts:
                     p = FilePart(**p_data)
-                    part_path = f"{file_path}.part{p.index}"
+                    part_path = f"{temp_base_path}.part{p.index}"
                     
                     # 检查分片文件真实状态
                     if p.status == 'completed':
-                        # 如果标记完成但文件不存在，重置
+                        # 如果标记完成但文件不存在
+                        # 注意：如果最终文件存在，可能分片已经被合并删除了
                         if not os.path.exists(part_path) and not os.path.exists(file_path):
                             p.status = 'pending'
                             
@@ -329,14 +379,64 @@ class TelethonDownloader:
                     )
                     
                     for part in pending_parts:
-                        part_path = f"{file_path}.part{part.index}"
+                        part_path = f"{temp_base_path}.part{part.index}"
                         download_tasks.append(
-                            self.download_part_worker(semaphore, task, part, part_path)
+                            asyncio.create_task(self.download_part_worker(semaphore, task, part, part_path))
                         )
                     
-                    # 等待下载完成
-                    await asyncio.gather(*download_tasks)
+                    # 监控取消事件
+                    cancel_waiter = asyncio.create_task(self.cancel_event.wait())
                     
+                    # 核心逻辑：等待 "所有下载完成" 或者 "取消信号触发"
+                    # 我们把所有下载任务打包成一个 awaitable
+                    main_download_group = asyncio.gather(*download_tasks)
+                    
+                    try:
+                        done, pending = await asyncio.wait(
+                            [main_download_group, cancel_waiter], 
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                    except Exception as e:
+                        # 异常处理：取消所有任务
+                        main_download_group.cancel()
+                        cancel_waiter.cancel()
+                        raise e
+
+                    # Case 1: 取消触发
+                    # Case 1: 取消触发
+                    if self.cancel_event.is_set():
+                        monitor_stop.set() # 立即停止监控
+                        logger.warning(f"⛔ 任务被取消: {task.file_name}")
+                        
+                        # 架构优化：立即物理断开网络连接，强制中断 Telethon IO
+                        await self._cleanup_workers()
+                        
+                        main_download_group.cancel() # 取消正在进行的下载
+                        monitor_task.cancel() # 取消监控任务
+                        try:
+                            await main_download_group # 等待取消完成
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            logger.error(f"取消过程中发生错误: {e}")
+                        
+                        task.status = "cancelled"
+                        self._save_task(task)
+                        continue
+
+                    # Case 2: 下载任务组完成 (可能是成功，也可能是异常)
+                    if main_download_group in done:
+                        cancel_waiter.cancel() # 不需要再等取消了
+                        
+                        # 检查 gather 的结果是否有异常
+                        # gather 默认会把异常抛出来，或者包含在结果里
+                        try:
+                            await main_download_group
+                        except Exception as e:
+                            # 真正的下载错误
+                            raise e 
+
+
                     # 停止监控
                     monitor_stop.set()
                     await asyncio.sleep(0.1)  # 让监控有机会最后刷新一次
@@ -357,7 +457,9 @@ class TelethonDownloader:
                     
             except Exception as e:
                 task.status = "error"
-                logger.error(f"❌ 任务出错: {e}")
+                # 只有在非主动取消的情况下才打印错误日志
+                if not self.cancel_event.is_set():
+                    logger.error(f"❌ 任务出错: {e}")
                 import traceback
                 traceback.print_exc()
             finally:
@@ -387,10 +489,18 @@ class TelethonDownloader:
                     # 移除 INFO 日志以避免干扰监控面板
                     # logger.info(f"✅ 分片 P{part.index} 完成")
                     
+                except asyncio.CancelledError:
+                    task.parts[part.index]['status'] = 'pending' # 重置为 pending 以便下次恢复
+                    self.part_status[part.index] = "cancelled"
+                    raise
                 except Exception as e:
                     self.part_status[part.index] = "error"
                     task.parts[part.index]['status'] = 'error'
-                    logger.error(f"❌ P{part.index} 失败: {e}")
+                    
+                    # 只有在非主动取消的情况下才打印错误日志
+                    # "Cannot send requests while disconnected" 是物理中断连接后的正常现象
+                    if not self.cancel_event.is_set():
+                        logger.error(f"❌ P{part.index} 失败: {e}")
                     raise e
             finally:
                 self.worker_queue.put_nowait(worker_client)
@@ -424,6 +534,9 @@ class TelethonDownloader:
                 chunk_size=512 * 1024, # 512KB
                 request_size=512 * 1024,
             ):
+                if self.cancel_event.is_set():
+                    raise asyncio.CancelledError("Task Cancelled")
+                    
                 # 计算剩余需要写入的字节数，防止溢出
                 remaining = expected_size - current_offset
                 if remaining <= 0:
@@ -443,16 +556,18 @@ class TelethonDownloader:
         """合并分片"""
         logger.info(f"\n🔄 正在合并 {len(task.parts)} 个分片...")
         
+        temp_base_path = os.path.join(Config.TEMP_DIR, task.file_name)
+        
         # 简单检查所有分片是否都在
         for p in task.parts:
-            part_path = f"{file_path}.part{p['index']}"
+            part_path = f"{temp_base_path}.part{p['index']}"
             if not os.path.exists(part_path):
                 logger.error(f"❌ 缺失分片文件: {part_path}")
                 return
 
         with open(file_path, 'wb') as outfile:
             for p in task.parts:
-                part_path = f"{file_path}.part{p['index']}"
+                part_path = f"{temp_base_path}.part{p['index']}"
                 with open(part_path, 'rb') as infile:
                     while True:
                         chunk = infile.read(4 * 1024 * 1024) # 4MB Buffer
@@ -493,6 +608,11 @@ class TelethonDownloader:
             except Exception as e:
                 logger.error(f"❌ 发送通知失败: {e}")
 
+            except Exception as e:
+                logger.error(f"❌ 发送通知失败: {e}")
+
+            # 添加到数据库历史记录
+            await database.add_history(task.file_name, task.file_size, duration_str)
             await asyncio.sleep(0.2)
 
     async def monitor_progress(self, task, num_parts, stop_event):
@@ -631,4 +751,211 @@ class TelethonDownloader:
             status_lines.append("\n💤 当前无下载任务")
             
         return "\n".join(status_lines)
+
+    async def cancel_current_task(self):
+        """取消当前正在运行的任务"""
+        if self.is_running and self.current_task:
+            logger.info(f"👋收到取消指令: {self.current_task.file_name}")
+            self.cancel_event.set()
+            return True
+        return False
+
+    async def restore_tasks(self):
+        """从临时文件恢复未完成的任务"""
+        if not Config.TEMP_DIR or not os.path.exists(Config.TEMP_DIR):
+            return
+
+        logger.info("🔍 正在扫描未完成任务...")
+        count = 0
+        import glob
+        
+        files = glob.glob(os.path.join(Config.TEMP_DIR, "task_*.json"))
+        for file in files:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # 过滤已完成或已取消的任务
+                if data.get('status') in ['completed', 'cancelled']:
+                    continue
+                
+                # 恢复任务对象
+                task = DownloadTask.from_dict(data)
+                
+                # 获取原始消息对象 (必须，否则无法下载)
+                try:
+                    message = await self.client.get_messages(task.chat_id, ids=task.message_id)
+                    if not message or not message.media:
+                        logger.warning(f"⚠️ 无法恢复任务 {task.file_name}: 消息已失效")
+                        continue
+                    task.message = message
+                except Exception as e:
+                    logger.warning(f"⚠️ 无法获取消息 {task.message_id}: {e}")
+                    continue
+
+                # 添加到队列
+                # 避免重复
+                if not any(t.message_id == task.message_id for t in self.tasks) and \
+                   (not self.current_task or self.current_task.message_id != task.message_id):
+                    self.tasks.append(task)
+                    count += 1
+                    logger.info(f"♻️ 已恢复任务: {task.file_name} ({task.status})")
+                    
+            except Exception as e:
+                logger.error(f"❌ 恢复任务失败 {file}: {e}")
+        
+        if count > 0:
+            logger.info(f"✅ 成功恢复 {count} 个任务")
+            # 触发队列处理
+            if not self.is_running:
+                asyncio.create_task(self.process_queue())
+
+    async def get_cancelled_tasks(self):
+        """获取所有已取消的任务列表"""
+        if not Config.TEMP_DIR or not os.path.exists(Config.TEMP_DIR):
+            return []
+
+        cancelled_tasks = []
+        import glob
+        files = glob.glob(os.path.join(Config.TEMP_DIR, "task_*.json"))
+        
+        for file in files:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                if data.get('status') == 'cancelled':
+                    # 避免加载太多详细信息，只返回基本信息
+                    task_info = {
+                        "message_id": data['message_id'],
+                        "filename": data['file_name'],
+                        "size": data['file_size'],
+                        "updated_at": data.get('updated_at', ''),
+                        "progress": data.get('downloaded_bytes', 0) / data.get('file_size', 1) * 100
+                    }
+                    cancelled_tasks.append(task_info)
+            except:
+                pass
+        
+        # 按时间倒序
+        cancelled_tasks.sort(key=lambda x: x['updated_at'], reverse=True)
+        return cancelled_tasks
+
+    async def delete_task(self, message_id):
+        """彻底清除已取消任务及其临时文件"""
+        if not Config.TEMP_DIR or not os.path.exists(Config.TEMP_DIR):
+            return False
+
+        import glob
+        # 1. 找到对应的元数据文件
+        # 因为我们不知道 chat_id，所以需要扫描
+        target_file = None
+        task_data = None
+        
+        files = glob.glob(os.path.join(Config.TEMP_DIR, "task_*.json"))
+        for file in files:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if str(data.get('message_id')) == str(message_id):
+                    target_file = file
+                    task_data = data
+                    break
+            except:
+                continue
+                
+        if not target_file:
+            logger.warning(f"❌ 找不到需要删除的任务 ID: {message_id}")
+            return False
+            
+        # 2. 删除分片文件
+        try:
+            file_name = task_data.get('file_name')
+            if file_name:
+                # 构造分片的基础路径
+                # 注意：这里需要与 download_part_worker 中的路径生成逻辑一致
+                # part_path = f"{temp_base_path}.part{p.index}"
+                # temp_base_path = os.path.join(Config.TEMP_DIR, task.file_name)
+                
+                # 使用 glob 匹配所有分片
+                # 注意转义文件名中的特殊字符用于 glob
+                escaped_name = glob.escape(file_name)
+                part_pattern = os.path.join(Config.TEMP_DIR, f"{escaped_name}.part*")
+                part_files = glob.glob(part_pattern)
+                
+                for pf in part_files:
+                    try:
+                        os.remove(pf)
+                    except OSError as e:
+                        logger.error(f"删除分片失败 {pf}: {e}")
+                        
+            logger.info(f"🗑️ 已清理任务文件: {file_name}")
+        except Exception as e:
+            logger.error(f"清理分片过程出错: {e}")
+            
+        # 3. 删除元数据文件
+        try:
+            os.remove(target_file)
+            logger.info(f"✅ 任务记录已移除: {target_file}")
+            return True
+        except Exception as e:
+            logger.error(f"删除任务记录失败: {e}")
+            return False
+            return False
+
+    async def resume_task(self, message_id):
+        """恢复已取消的任务"""
+        logger.info(f"♻️ 正在恢复任务 ID: {message_id}")
+        import glob
+        
+        # 查找对应的任务文件 (因为不知道 chat_id，只能遍历)
+        # 或者假如我们知道 message_id 是唯一的
+        files = glob.glob(os.path.join(Config.TEMP_DIR, f"task_*_{message_id}.json"))
+        if not files:
+            logger.warning("❌ 找不到任务文件")
+            return False
+            
+        file_path = files[0]
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            task = DownloadTask.from_dict(data)
+            
+            # 获取原始消息
+            try:
+                message = await self.client.get_messages(task.chat_id, ids=task.message_id)
+                if not message or not message.media:
+                    logger.warning("❌ 消息已失效，无法恢复")
+                    return False
+                task.message = message
+            except Exception as e:
+                logger.warning(f"❌ 获取消息失败: {e}")
+                return False
+                
+            # 重置状态
+            task.status = "pending"
+            self._save_task(task)
+            
+            # 加入队列
+            for t in self.tasks:
+                if t.message_id == task.message_id:
+                    logger.info("⚠️ 任务已在队列中")
+                    return True
+                    
+            if self.current_task and self.current_task.message_id == task.message_id:
+                 logger.info("⚠️ 任务正在运行")
+                 return True
+
+            self.tasks.append(task)
+            logger.info(f"✅ 任务已恢复并加入队列: {task.file_name}")
+            
+            if not self.is_running:
+                asyncio.create_task(self.process_queue())
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 恢复任务出错: {e}")
+            return False
 

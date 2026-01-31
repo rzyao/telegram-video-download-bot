@@ -1,92 +1,149 @@
-"""
-Telegram 断点续传下载器 - 配置管理
-支持环境变量覆盖，便于在不同环境（本地/服务器）部署
-"""
 import os
+import database
+import logging
 
 class Config:
-    """配置类，集中管理所有配置项"""
+    """配置类，数据库驱动"""
     
-    # ==================== Telegram API ====================
-    # ==================== Telegram API ====================
-    # 默认使用 Telegram Desktop 官方 API ID (配合 Windows 伪装，权限最高)
-    # 也可以通过环境变量覆盖
-    API_ID = int(os.getenv("TG_API_ID", "2040"))
-    API_HASH = os.getenv("TG_API_HASH", "b18441a1ff607e10a989891a5462e627")
-    SESSION_NAME = os.getenv("TG_SESSION_NAME", "telethon_session")
+    # 默认出厂配置
+    DEFAULTS = {
+        "telegram.api_id": 2040,
+        "telegram.api_hash": "b18441a1ff607e10a989891a5462e627",
+        "telegram.session_name": "telethon_session",
+        
+        "directories.download_dir": "D:/tg_downloads" if os.name == 'nt' else "/mnt/downloads",
+        "directories.temp_dir": "", # Will be derived
+        
+        "proxy.enable": False,
+        "proxy.scheme": "socks5",
+        "proxy.host": "127.0.0.1",
+        "proxy.port": 1080,
+        
+        "download.max_workers": 4,
+        "download.worker_count": 4,
+        
+        "dashboard.enable": True,
+        "dashboard.host": "0.0.0.0",
+        "dashboard.port": 8000,
+        
+        "logging.file": "tg_downloader.log",
+        "logging.headless": False,
+        "logging.log_interval": 30,
+        
+        "system.setup_completed": False
+    }
     
-    # 旧配置备份
-    # API_ID = int(os.getenv("TG_API_ID", "36348713"))
-    # API_HASH = os.getenv("TG_API_HASH", "cfa5fdaedc3b34f934d8d4152e41811a")
-    # SESSION_NAME = os.getenv("TG_SESSION_NAME", "ayao_account")
+    # 当前内存配置
+    _settings = {}
     
-    # ==================== 下载目录 ====================
-    # Windows 默认: D:/tg_downloads
-    # Linux 默认: /mnt/downloads/telegram_videos
-    if os.name == 'nt':
-        DEFAULT_DOWNLOAD_DIR = "D:/tg_downloads"
-    else:
-        DEFAULT_DOWNLOAD_DIR = "/mnt/downloads/telegram_videos"
+    # 类属性占位符 (防止 IDE 报错)
+    API_ID = 2040
+    API_HASH = ""
+    SESSION_NAME = ""
+    DOWNLOAD_DIR = ""
+    TEMP_DIR = ""
+    USE_PROXY = False
+    PROXY = None
+    MAX_WORKERS = 4
+    WORKER_COUNT = 4
+    DASHBOARD_HOST = "0.0.0.0"
+    DASHBOARD_PORT = 8000
+    ENABLE_DASHBOARD = True
+    SETUP_COMPLETED = False
     
-    DOWNLOAD_DIR = os.getenv("TG_DOWNLOAD_DIR", DEFAULT_DOWNLOAD_DIR)
-    
-    # 进度文件存储目录（相对于 DOWNLOAD_DIR）
-    PROGRESS_DIR = ".progress"
-    
-    # ==================== 代理配置 ====================
-    # 服务器上通常不需要代理，设置 USE_PROXY=false
-    # 本地测试时设置 USE_PROXY=true
-    USE_PROXY = os.getenv("USE_PROXY", "true" if os.name == 'nt' else "false").lower() == "true"
-    
-    if USE_PROXY:
-        PROXY = {
-            "scheme": "socks5",
-            "hostname": os.getenv("PROXY_HOST", "192.168.50.2"),
-            "port": int(os.getenv("PROXY_PORT", "10088"))
-        }
-    else:
-        PROXY = None
-    
-    # ==================== 下载配置 ====================
-    CHUNK_SIZE = 1024 * 1024  # 1MB 每请求块（Telegram API 限制）
-    PART_SIZE = 10 * 1024 * 1024  # 10MB 每并发分片（每个 Worker 负责下载的大小）
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))  # 并发线程数
-    WORKER_COUNT = int(os.getenv("WORKER_COUNT", "4")) # 独立客户端池大小 (建议与 MAX_WORKERS 一致或略小)
-    MAX_RETRIES = 50          # 单块最大重试次数
-    RETRY_DELAY_BASE = 5      # 基础重试间隔（秒）
-    RETRY_DELAY_MAX = 60      # 最大重试间隔（秒）
-    
-    # ==================== 日志与后台运行配置 ====================
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-    LOG_FILE = os.getenv("LOG_FILE", "tg_downloader.log")
-    
-    # Headless 模式：适合后台运行，禁用进度条，改为定时日志
-    HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
-    # Headless 模式下日志打印间隔（秒）
-    LOG_INTERVAL = int(os.getenv("LOG_INTERVAL", "30"))    
+    # 日志相关
+    LOG_FILE = "tg_downloader.log"
+    HEADLESS = False
+    LOG_INTERVAL = 30
+
+    # 静态常量
+    CHUNK_SIZE = 1024 * 1024
+    PART_SIZE = 10 * 1024 * 1024
+    MAX_RETRIES = 50
+    RETRY_DELAY_BASE = 5
+    RETRY_DELAY_MAX = 60
+    LOG_LEVEL = "INFO"
+
+    @classmethod
+    def load(cls):
+        """从数据库加载配置"""
+        db_settings = database.load_settings_sync()
+        cls._settings = cls.DEFAULTS.copy()
+        # Merge DB settings
+        cls._settings.update(db_settings)
+        
+        # 刷新属性
+        cls.API_ID = int(cls.get("telegram.api_id"))
+        cls.API_HASH = cls.get("telegram.api_hash")
+        cls.SESSION_NAME = cls.get("telegram.session_name")
+        
+        cls.DOWNLOAD_DIR = cls.get("directories.download_dir")
+        
+        # 优先使用用户配置的临时目录，提升 IO 性能
+        custom_temp = cls.get("directories.temp_dir")
+        if custom_temp and custom_temp.strip():
+            cls.TEMP_DIR = custom_temp
+        else:
+            # 用户要求直接使用项目根目录作为默认临时目录
+            cls.TEMP_DIR = "." # Current directory
+        
+        cls.USE_PROXY = cls.get("proxy.enable")
+        if cls.USE_PROXY:
+            cls.PROXY = {
+                "scheme": cls.get("proxy.scheme"),
+                "hostname": cls.get("proxy.host"),
+                "port": int(cls.get("proxy.port"))
+            }
+        else:
+            cls.PROXY = None
+
+        cls.MAX_WORKERS = int(cls.get("download.max_workers"))
+        cls.WORKER_COUNT = int(cls.get("download.worker_count"))
+        
+        cls.DASHBOARD_HOST = cls.get("dashboard.host")
+        cls.DASHBOARD_PORT = int(cls.get("dashboard.port"))
+        cls.ENABLE_DASHBOARD = cls.get("dashboard.enable", True)
+        
+        cls.LOG_FILE = cls.get("logging.file", "tg_downloader.log")
+        cls.HEADLESS = cls.get("logging.headless", False)
+        cls.LOG_INTERVAL = int(cls.get("logging.log_interval", 30))
+        
+        cls.SETUP_COMPLETED = cls.get("system.setup_completed", False)
+        
+        # 确保目录存在 (只在 Setup 完成后或目录已配置时尝试)
+        if cls.SETUP_COMPLETED or os.path.isabs(cls.DOWNLOAD_DIR):
+             cls.ensure_directories()
+             
+        print(f"✅ 配置已加载 (已初始化: {cls.SETUP_COMPLETED})")
+
+    @classmethod
+    def get(cls, key, default=None):
+        return cls._settings.get(key, default)
+
+    @classmethod
+    def reload(cls):
+        cls.load()
+
+    @classmethod
+    def get_progress_file_path(cls, message_id, chat_id):
+        """获取任务进度文件路径"""
+        filename = f"task_{chat_id}_{message_id}.json"
+        return os.path.join(cls.TEMP_DIR, filename)
+
     @classmethod
     def ensure_directories(cls):
         """确保必要的目录存在"""
-        os.makedirs(cls.DOWNLOAD_DIR, exist_ok=True)
-        os.makedirs(os.path.join(cls.DOWNLOAD_DIR, cls.PROGRESS_DIR), exist_ok=True)
-    
-    @classmethod
-    def get_progress_file_path(cls, message_id: int, chat_id: int) -> str:
-        """获取进度文件路径"""
-        return os.path.join(
-            cls.DOWNLOAD_DIR, 
-            cls.PROGRESS_DIR, 
-            f"task_{chat_id}_{message_id}.json"
-        )
-    
-    @classmethod
-    def print_config(cls):
-        """打印当前配置（调试用）"""
-        print("=" * 50)
-        print("当前配置:")
-        print(f"  下载目录: {cls.DOWNLOAD_DIR}")
-        print(f"  使用代理: {cls.USE_PROXY}")
-        if cls.USE_PROXY and cls.PROXY:
-            print(f"  代理地址: {cls.PROXY['hostname']}:{cls.PROXY['port']}")
-        print(f"  最大重试: {cls.MAX_RETRIES} 次")
-        print("=" * 50)
+        if cls.DOWNLOAD_DIR and not os.path.exists(cls.DOWNLOAD_DIR):
+            try:
+                os.makedirs(cls.DOWNLOAD_DIR, exist_ok=True)
+            except Exception as e:
+                print(f"创建下载目录失败: {e}")
+                
+        if cls.TEMP_DIR and not os.path.exists(cls.TEMP_DIR):
+            try:
+                os.makedirs(cls.TEMP_DIR, exist_ok=True)
+            except Exception as e:
+                print(f"创建临时目录失败: {e}")
+
+# 模块加载时自动执行一次配置加载
+Config.load()

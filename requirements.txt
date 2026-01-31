@@ -1,2 +1,8 @@
 telethon
 python-socks[asyncio]
+fastapi
+uvicorn
+jinja2
+aiofiles
+psutil
+aiosqlite

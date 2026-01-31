@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram 下载控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        /* 自定义滚动条 */
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .console-log::-webkit-scrollbar { width: 6px; }
+        .console-log::-webkit-scrollbar-track { background-color: #111827; }
+        .console-log::-webkit-scrollbar-thumb { background-color: #4B5563; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen pb-12">
+    
+    <!-- Top Stats Bar (CPU/RAM) -->
+    <div class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-10 flex items-center justify-end gap-6 text-xs text-gray-400 font-mono">
+            <span id="sys-cpu">CPU: 0%</span>
+            <span id="sys-ram">RAM: 0%</span>
+            <span id="sys-disk">DISK: 0% (Free: 0GB)</span>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <i class="fa-brands fa-telegram text-blue-500 text-2xl"></i>
+                <h1 class="text-xl font-bold tracking-tight text-gray-900">下载控制台</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <button onclick="openSettings()" class="h-8 w-8 rounded-full bg-gray-100 hover:bg-blue-50 text-gray-500 hover:text-blue-600 flex items-center justify-center transition-all duration-200" title="设置">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
+                <div id="connection-status" class="flex items-center gap-2 text-sm text-green-600 font-medium">
+                    <span class="relative flex h-3 w-3">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                    在线
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        
+        <!-- Bot Status Banner (Hidden if connected) -->
+        <div id="bot-status-banner" class="hidden bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="h-10 w-10 bg-yellow-100 rounded-lg flex items-center justify-center text-yellow-600">
+                    <i class="fa-solid fa-triangle-exclamation text-lg"></i>
+                </div>
+                <div>
+                    <p class="font-semibold text-gray-900">Telegram Bot 未连接</p>
+                    <p class="text-sm text-gray-600" id="bot-status-message">请点击右侧按钮启动 Bot</p>
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="reLogin()" id="relogin-btn" class="hidden px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-right-to-bracket"></i> 重新登录
+                </button>
+                <button onclick="startBot()" id="start-bot-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-play"></i> 启动 Bot
+                </button>
+            </div>
+        </div>
+        
+        <!-- Status Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Speed Card -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">实时速度</p>
+                    <p class="text-2xl font-bold mt-1 text-gray-900" id="global-speed">0.0 MB/s</p>
+                </div>
+                <div class="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                    <i class="fa-solid fa-bolt text-lg"></i>
+                </div>
+            </div>
+            
+            <!-- Queue Card -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">队列任务</p>
+                    <p class="text-2xl font-bold mt-1 text-gray-900" id="queue-count">0</p>
+                </div>
+                <div class="h-10 w-10 bg-purple-50 rounded-lg flex items-center justify-center text-purple-600">
+                    <i class="fa-solid fa-layer-group text-lg"></i>
+                </div>
+            </div>
+
+            <!-- Status Card -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">运行状态</p>
+                    <p class="text-2xl font-bold mt-1 text-gray-900" id="run-status">空闲</p>
+                </div>
+                <div class="h-10 w-10 bg-green-50 rounded-lg flex items-center justify-center text-green-600">
+                    <i class="fa-solid fa-server text-lg"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Left Column: Tasks -->
+            <div class="lg:col-span-2 space-y-6">
+                <!-- Active Task -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
+                        <h2 class="text-sm font-semibold text-gray-700 uppercase tracking-wide">正在下载</h2>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 tracking-wider hidden" id="active-badge">ACTIVE</span>
+                    </div>
+                    <div class="p-6" id="active-task-container">
+                        <!-- Content injected by JS -->
+                        <div class="text-center py-8 text-gray-300">
+                            <i class="fa-solid fa-power-off text-3xl mb-3 opacity-50"></i>
+                            <p class="text-sm">当前没有正在进行的任务</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Queue List -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <h2 class="text-sm font-semibold text-gray-700 uppercase tracking-wide">等待队列</h2>
+                            <span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-mono" id="queue-badge">0</span>
+                        </div>
+                    </div>
+                    <ul class="divide-y divide-gray-100 max-h-64 overflow-y-auto" id="queue-list">
+                        <!-- Content injected by JS -->
+                        <li class="px-6 py-8 text-center text-sm text-gray-400 font-mono">
+                            No pending tasks
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- Cancelled Tasks (Hidden by default) -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hidden" id="cancelled-container">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <h2 class="text-sm font-semibold text-gray-700 uppercase tracking-wide">已取消任务</h2>
+                            <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-600 text-xs font-mono" id="cancelled-badge">0</span>
+                        </div>
+                    </div>
+                    <ul class="divide-y divide-gray-50 max-h-64 overflow-y-auto" id="cancelled-list">
+                        <!-- Content injected by JS -->
+                    </ul>
+                </div>
+                
+                <!-- History List -->
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h2 class="text-sm font-semibold text-gray-700 uppercase tracking-wide">最近完成</h2>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-left text-sm whitespace-nowrap">
+                            <tbody class="divide-y divide-gray-100" id="history-list">
+                                <!-- Content injected by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Logs -->
+            <div class="lg:col-span-1">
+                <div class="bg-gray-900 rounded-xl shadow-lg border border-gray-800 overflow-hidden flex flex-col" style="height: 600px">
+                    <div class="px-4 py-3 border-b border-gray-800 bg-gray-900 flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-terminal text-green-500 text-xs"></i>
+                            <h2 class="text-xs font-mono font-bold text-gray-400 uppercase">System Logs</h2>
+                        </div>
+                        <span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+                    </div>
+                    <div class="flex-1 p-4 overflow-y-auto font-mono text-xs console-log bg-gray-900" id="log-container">
+                        <!-- Logs injected here -->
+                        <div class="text-gray-600 mb-1">Waiting for logs...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden z-50 flex items-center justify-center backdrop-blur-sm transition-all duration-200">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 overflow-hidden transform scale-95 opacity-0 transition-all duration-200" id="settings-content">
+                <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <div class="flex items-center gap-3">
+                        <div class="h-8 w-8 rounded-lg bg-blue-600 flex items-center justify-center text-white">
+                            <i class="fa-solid fa-sliders text-sm"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-bold text-gray-900">系统设置</h3>
+                            <p class="text-xs text-gray-500">调整下载参数和网络配置</p>
+                        </div>
+                    </div>
+                    <button onclick="closeSettings()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <i class="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+                
+                <!-- Tab Navigation -->
+                <div class="border-b border-gray-200 bg-gray-50/30">
+                    <nav class="flex px-6">
+                        <button onclick="switchTab('basic')" id="tab-basic" class="settings-tab px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-blue-600">
+                            <i class="fa-solid fa-folder-open mr-1"></i> 基础设置
+                        </button>
+                        <button onclick="switchTab('network')" id="tab-network" class="settings-tab px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+                            <i class="fa-solid fa-network-wired mr-1"></i> 网络代理
+                        </button>
+                        <button onclick="switchTab('telegram')" id="tab-telegram" class="settings-tab px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+                            <i class="fa-brands fa-telegram mr-1"></i> Telegram
+                        </button>
+                    </nav>
+                </div>
+
+                <form id="settings-form" class="p-6 max-h-[500px] overflow-y-auto">
+                    <!-- Tab: Basic Settings -->
+                    <div id="panel-basic" class="settings-panel space-y-5">
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">下载目录</label>
+                            <input type="text" name="directories.download_dir" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="D:/tg_downloads">
+                            <p class="text-xs text-gray-400 mt-1">完成的文件将保存在此目录</p>
+                        </div>
+
+
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">并发下载数</label>
+                                <input type="number" name="download.max_workers" min="1" max="16" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <p class="text-xs text-gray-400 mt-1">同时下载的分片数量</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">Worker 线程</label>
+                                <input type="number" name="download.worker_count" min="1" max="16" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <p class="text-xs text-gray-400 mt-1">下载线程池大小</p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Dashboard 端口</label>
+                            <input type="number" name="dashboard.port" min="1000" max="65535" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-400 mt-1">修改后需重启生效</p>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Network Proxy -->
+                    <div id="panel-network" class="settings-panel hidden space-y-5">
+                        <div class="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" name="proxy.enable" class="sr-only peer" onchange="toggleProxyInSettings(this)">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                            <div>
+                                <span class="text-sm font-semibold text-gray-900">启用代理</span>
+                                <p class="text-xs text-gray-500">用于突破网络限制</p>
+                            </div>
+                        </div>
+
+                        <div id="proxy-fields" class="space-y-4 opacity-50 pointer-events-none">
+                            <div class="grid grid-cols-12 gap-3">
+                                <div class="col-span-3">
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">协议</label>
+                                    <select name="proxy.scheme" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                        <option value="socks5">SOCKS5</option>
+                                        <option value="http">HTTP</option>
+                                    </select>
+                                </div>
+                                <div class="col-span-6">
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">主机地址</label>
+                                    <input type="text" name="proxy.host" placeholder="127.0.0.1" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div class="col-span-3">
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">端口</label>
+                                    <input type="number" name="proxy.port" placeholder="1080" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Telegram -->
+                    <div id="panel-telegram" class="settings-panel hidden space-y-5">
+                        <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                            <i class="fa-solid fa-triangle-exclamation mr-1"></i>
+                            修改 API 凭证需要重新登录
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">API ID</label>
+                                <input type="number" name="telegram.api_id" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">API Hash</label>
+                                <input type="text" name="telegram.api_hash" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Session 名称</label>
+                            <input type="text" name="telegram.session_name" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-400 mt-1">登录会话文件名</p>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-100">
+                    <button onclick="closeSettings()" class="px-5 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">取消</button>
+                    <button onclick="saveSettings()" class="px-5 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors flex items-center gap-2">
+                        <i class="fa-solid fa-save"></i> 保存配置
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // Bot Status Check
+        window.addEventListener('DOMContentLoaded', checkBotStatus);
+
+        async function checkBotStatus() {
+            try {
+                const res = await fetch('/api/bot/status');
+                const data = await res.json();
+                
+                const banner = document.getElementById('bot-status-banner');
+                const message = document.getElementById('bot-status-message');
+                const startBtn = document.getElementById('start-bot-btn');
+                const reloginBtn = document.getElementById('relogin-btn');
+                
+                if (!data.client_connected) {
+                    banner.classList.remove('hidden');
+                    
+                    if (!data.setup_completed) {
+                        message.textContent = '请先完成初始化配置';
+                        startBtn.classList.add('hidden');
+                        reloginBtn.classList.add('hidden');
+                    } else if (!data.session_exists) {
+                        message.textContent = '请先完成 Telegram 登录';
+                        startBtn.classList.add('hidden');
+                        reloginBtn.classList.remove('hidden');
+                    } else {
+                        // Session exists but not connected - might be expired
+                        message.textContent = 'Session 可能已过期，请重新登录或尝试启动';
+                        startBtn.classList.remove('hidden');
+                        reloginBtn.classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to check bot status:', e);
+            }
+        }
+
+        function reLogin() {
+            if (confirm('重新登录将删除当前 Session，是否继续？\n\n删除后请访问初始化页面完成登录')) {
+                // 删除旧 Session
+                fetch('/api/telegram/session', { method: 'DELETE' })
+                    .then(() => {
+                        // 添加延迟确保文件删除完成
+                        setTimeout(() => {
+                            alert('✅ Session 已删除，即将跳转到初始化页面...');
+                            // 强制跳转到 setup 页面（添加时间戳避免缓存）
+                            window.location.href = '/setup.html?t=' + Date.now();
+                        }, 500);
+                    })
+                    .catch(err => {
+                        console.error('Failed to delete session:', err);
+                        alert('删除 Session 失败，请刷新页面重试');
+                    });
+            }
+        }
+
+        async function startBot() {
+            const btn = document.getElementById('start-bot-btn');
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 启动中...';
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch('/api/bot/start', { method: 'POST' });
+                
+                if (res.ok) {
+                    alert('✅ Bot 启动成功！');
+                    location.reload();
+                } else {
+                    const err = await res.json();
+                    alert('启动失败: ' + err.error);
+                    btn.innerHTML = '<i class="fa-solid fa-play"></i> 启动 Bot';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('网络错误');
+                btn.innerHTML = '<i class="fa-solid fa-play"></i> 启动 Bot';
+                btn.disabled = false;
+            }
+        }
+
+        function formatBytes(bytes, decimals = 2) {
+            if (!+bytes) return '0 B';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        }
+
+        async function cancelTask() {
+            if(!confirm("确定要取消当前任务吗？")) return;
+            try {
+                const res = await fetch('/api/task/cancel', { method: 'POST' });
+                const d = await res.json();
+                if(d.status === 'ok') {
+                    alert("已发送取消请求");
+                } else {
+                    alert("取消失败: " + d.message);
+                }
+            } catch(e) {
+                alert("网络错误");
+            }
+        }
+
+        async function updateSystemStats() {
+            try {
+                const res = await fetch('/api/system');
+                const d = await res.json();
+                document.getElementById('sys-cpu').innerText = `CPU: ${d.cpu}%`;
+                document.getElementById('sys-ram').innerText = `RAM: ${d.memory}%`;
+                document.getElementById('sys-disk').innerText = `DISK: ${d.disk}% (${d.disk_free_gb}GB Free)`;
+            } catch(e) {}
+        }
+
+        async function updateLogs() {
+            try {
+                const res = await fetch('/api/logs');
+                const d = await res.json();
+                const container = document.getElementById('log-container');
+                
+                if (d.logs.length > 0) {
+                    const html = d.logs.map(log => {
+                        // Simple color coding based on level
+                        let colorClass = 'text-gray-300';
+                        if (log.includes('ERROR')) colorClass = 'text-red-400';
+                        if (log.includes('WARNING')) colorClass = 'text-yellow-400';
+                        if (log.includes('INFO')) colorClass = 'text-blue-300';
+                        return `<div class="mb-1 leading-relaxed ${colorClass}">${log}</div>`;
+                    }).join('');
+                    
+                    // check if scrolled to bottom
+                    const isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 10;
+                    
+                    container.innerHTML = html;
+                    
+                    if (isScrolledToBottom) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // 1. Update Top Cards
+                document.getElementById('global-speed').innerText = formatBytes(data.current_speed) + '/s';
+                document.getElementById('queue-count').innerText = data.queue_count;
+                document.getElementById('run-status').innerText = data.running ? '运行中' : '空闲';
+                
+                // 2. Active Task
+                const container = document.getElementById('active-task-container');
+                const badge = document.getElementById('active-badge');
+                const downloadingTask = data.tasks.find(t => t.status === 'downloading');
+                
+                if (downloadingTask) {
+                    badge.classList.remove('hidden');
+                    const percent = downloadingTask.percent.toFixed(1);
+                    container.innerHTML = `
+                        <div class="space-y-5">
+                            <div class="flex items-start justify-between gap-4">
+                                <div class="flex items-start gap-4 flex-1 min-w-0">
+                                    <div class="h-12 w-12 rounded-xl bg-blue-50 flex-shrink-0 flex items-center justify-center text-blue-600">
+                                        <i class="fa-solid fa-file-video text-xl"></i>
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <h3 class="font-bold text-gray-900 truncate" title="${downloadingTask.filename}">${downloadingTask.filename}</h3>
+                                        <div class="flex items-center gap-3 mt-1 text-xs font-mono text-gray-500">
+                                            <span class="bg-gray-100 px-1.5 py-0.5 rounded">${formatBytes(downloadingTask.size)}</span>
+                                            <span>•</span>
+                                            <span>ETA: ${downloadingTask.eta}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button onclick="cancelTask()" class="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100">
+                                    <i class="fa-solid fa-stop mr-1"></i> 取消
+                                </button>
+                            </div>
+                            
+                            <div class="space-y-2">
+                                <div class="flex justify-between items-end">
+                                    <div class="text-xs text-gray-500 font-mono">
+                                        <i class="fa-solid fa-gauge-high mr-1"></i> ${formatBytes(downloadingTask.speed)}/s
+                                    </div>
+                                    <div class="text-2xl font-bold text-gray-900">${percent}%</div>
+                                </div>
+                                <div class="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                                    <div class="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-linear shadow-[0_0_10px_rgba(37,99,235,0.3)]" style="width: ${percent}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    badge.classList.add('hidden');
+                    container.innerHTML = `
+                        <div class="text-center py-8 text-gray-300">
+                            <i class="fa-solid fa-power-off text-3xl mb-3 opacity-20"></i>
+                            <p class="text-sm">当前没有正在进行的任务</p>
+                        </div>
+                    `;
+                }
+
+                // 3. Queue List
+                const queueList = document.getElementById('queue-list');
+                const pendingTasks = data.tasks.filter(t => t.status === 'pending');
+                
+                document.getElementById('queue-badge').innerText = data.queue_count;
+
+                if (pendingTasks.length > 0) {
+                    queueList.innerHTML = pendingTasks.map(t => `
+                        <li class="px-6 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors group">
+                            <div class="flex items-center gap-3 text-sm overflow-hidden flex-1 min-w-0 mr-4">
+                                <span class="h-6 w-6 rounded bg-gray-100 flex items-center justify-center text-gray-400 text-xs flex-shrink-0">Waiting</span>
+                                <span class="font-medium text-gray-600 truncate" title="${t.filename}">${t.filename}</span>
+                            </div>
+                            <span class="text-xs text-gray-400 font-mono flex-shrink-0">${formatBytes(t.size)}</span>
+                        </li>
+                    `).join('');
+                } else {
+                    queueList.innerHTML = `
+                        <li class="px-6 py-8 text-center text-xs text-gray-400 font-mono">
+                            -- No pending tasks --
+                        </li>
+                    `;
+                }
+
+                // 4. Cancelled Tasks
+                const cancelledList = document.getElementById('cancelled-list');
+                const cancelledContainer = document.getElementById('cancelled-container');
+                const cancelledBadge = document.getElementById('cancelled-badge');
+
+                if (data.cancelled && data.cancelled.length > 0) {
+                    cancelledContainer.classList.remove('hidden');
+                    cancelledBadge.innerText = data.cancelled.length;
+                    
+                    cancelledList.innerHTML = data.cancelled.map(t => `
+                        <li class="px-6 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors group">
+                            <div class="flex items-center gap-3 text-sm overflow-hidden flex-1 min-w-0 mr-4">
+                                <span class="h-6 w-6 rounded bg-red-50 flex items-center justify-center text-red-500 text-xs flex-shrink-0">
+                                    <i class="fa-solid fa-ban"></i>
+                                </span>
+                                <div class="flex flex-col min-w-0">
+                                    <span class="text-xs text-gray-400 font-mono">${t.progress.toFixed(1)}% • ${formatBytes(t.size)}</span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="resumeTask(${t.message_id})" class="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 bg-blue-50 rounded hover:bg-blue-100 transition-colors flex items-center gap-1" title="恢复下载">
+                                    <i class="fa-solid fa-rotate-right"></i> 继续
+                                </button>
+                                <button onclick="deleteCancelledTask(${t.message_id})" class="text-red-600 hover:text-red-800 text-xs font-medium px-2 py-1 bg-red-50 rounded hover:bg-red-100 transition-colors flex items-center gap-1" title="彻底删除">
+                                    <i class="fa-solid fa-trash-can"></i>
+                                </button>
+                            </div>
+                        </li>
+                    `).join('');
+                } else {
+                    cancelledContainer.classList.add('hidden');
+                    cancelledList.innerHTML = '';
+                    cancelledBadge.innerText = '0';
+                }
+
+                // 4. History List
+                const historyList = document.getElementById('history-list');
+                if (data.history && data.history.length > 0) {
+                     historyList.innerHTML = data.history.map(t => `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-6 py-3">
+                                <div class="flex items-center gap-2 max-w-xs">
+                                     <i class="fa-solid fa-check-circle text-green-500 text-xs"></i>
+                                     <span class="text-gray-600 truncate text-xs" title="${t.filename}">${t.filename}</span>
+                                </div>
+                            </td>
+                            <td class="px-6 py-3 text-xs text-gray-400 font-mono text-right">
+                                ${formatBytes(t.size)}
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    historyList.innerHTML = `<tr><td colspan="2" class="px-6 py-4 text-center text-xs text-gray-400">暂无历史记录</td></tr>`;
+                }
+
+                // Status Indicator
+                document.getElementById('connection-status').innerHTML = `
+                    <span class="relative flex h-3 w-3">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                    在线
+                `;
+
+            } catch (e) {
+                document.getElementById('connection-status').innerHTML = `
+                    <span class="h-3 w-3 rounded-full bg-red-500"></span>
+                    离线
+                `;
+            }
+        }
+
+        // Loopers
+        setInterval(updateStatus, 1000);
+        setInterval(updateSystemStats, 2000); // System stats every 2s
+        setInterval(updateLogs, 1000);      // Logs every 1s
+        
+        // Initial call
+        updateStatus();
+        updateSystemStats();
+        updateLogs();
+
+        // Settings Modal Logic
+        const settingsModal = document.getElementById('settings-modal');
+        const settingsContent = document.getElementById('settings-content');
+        const settingsForm = document.getElementById('settings-form');
+        let originalConfig = {}; // 用于检测敏感配置变更
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.settings-tab').forEach(btn => {
+                btn.classList.remove('border-blue-600', 'text-blue-600');
+                btn.classList.add('border-transparent', 'text-gray-500');
+            });
+            document.getElementById(`tab-${tabName}`).classList.remove('border-transparent', 'text-gray-500');
+            document.getElementById(`tab-${tabName}`).classList.add('border-blue-600', 'text-blue-600');
+
+            // Update panels
+            document.querySelectorAll('.settings-panel').forEach(panel => panel.classList.add('hidden'));
+            document.getElementById(`panel-${tabName}`).classList.remove('hidden');
+        }
+
+        function toggleProxyInSettings(checkbox) {
+            const fields = document.getElementById('proxy-fields');
+            if (checkbox.checked) {
+                fields.classList.remove('opacity-50', 'pointer-events-none');
+            } else {
+                fields.classList.add('opacity-50', 'pointer-events-none');
+            }
+        }
+
+        async function openSettings() {
+            settingsModal.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                settingsContent.classList.remove('scale-95', 'opacity-0');
+                settingsContent.classList.add('scale-100', 'opacity-100');
+            });
+            
+            // Load Config from API
+            try {
+                const res = await fetch('/api/config');
+                const config = await res.json();
+                originalConfig = JSON.parse(JSON.stringify(config)); // Deep copy
+                
+                // Populate form fields
+                for (let key in config) {
+                    const input = settingsForm.querySelector(`[name="${key}"]`);
+                    if (input) {
+                        if (input.type === 'checkbox') {
+                            input.checked = config[key];
+                            // Trigger proxy toggle if it's the proxy.enable checkbox
+                            if (key === 'proxy.enable') {
+                                toggleProxyInSettings(input);
+                            }
+                        } else {
+                            input.value = config[key];
+                        }
+                    }
+                }
+            } catch(e) {
+                alert("❌ 加载配置失败: " + e);
+            }
+        }
+
+        function closeSettings() {
+            settingsContent.classList.remove('scale-100', 'opacity-100');
+            settingsContent.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => {
+                settingsModal.classList.add('hidden');
+            }, 200);
+        }
+
+        async function restartBot() {
+            if (!confirm("确定要重启 Bot 吗？\n\n当前所有下载任务将暂停，重启后自动恢复。")) return;
+            
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+                alert("🔄 Bot 正在重启...\n\n请等待几秒后刷新页面。");
+                setTimeout(() => location.reload(), 3000);
+            } catch(e) {
+                alert("❌ 重启失败: " + e);
+            }
+        }
+
+        async function saveSettings() {
+            const formData = new FormData(settingsForm);
+            const data = {};
+            
+            for (let [key, value] of formData.entries()) {
+                // Type conversion
+                if (!isNaN(value) && value !== '') {
+                    data[key] = Number(value);
+                } else {
+                    data[key] = value;
+                }
+            }
+            
+            // Handle unchecked checkboxes
+            const proxyCheckbox = settingsForm.querySelector('[name="proxy.enable"]');
+            if (proxyCheckbox && !proxyCheckbox.checked) {
+                data['proxy.enable'] = false;
+            }
+
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
+                if (res.ok) {
+                    // 检测是否修改了敏感配置
+                    const sensitiveKeys = ['proxy.enable', 'proxy.scheme', 'proxy.host', 'proxy.port', 
+                                          'telegram.api_id', 'telegram.api_hash', 'dashboard.port'];
+                    let needsRestart = false;
+                    
+                    for (let key of sensitiveKeys) {
+                        if (data[key] !== undefined && originalConfig[key] !== data[key]) {
+                            needsRestart = true;
+                            break;
+                        }
+                    }
+                    
+                    closeSettings();
+                    
+                    if (needsRestart) {
+                        const shouldRestart = confirm(
+                            "✅ 配置已保存！\n\n" +
+                            "⚠️ 您修改了网络/API 配置，需要重启才能生效。\n\n" +
+                            "是否立即重启 Bot？"
+                        );
+                        
+                        if (shouldRestart) {
+                            restartBot();
+                        }
+                    } else {
+                        alert("✅ 配置已保存并应用！");
+                    }
+                } else {
+                    const err = await res.json();
+                    alert("❌ 保存失败: " + err.error);
+                }
+            } catch(e) {
+                alert("❌ 网络错误");
+            }
+        }
+        async function resumeTask(messageId) {
+             const btn = event.currentTarget;
+             const originalHtml = btn.innerHTML;
+             btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+             btn.disabled = true;
+
+             try {
+                 const res = await fetch(`/api/task/resume/${messageId}`, { method: 'POST' });
+                 if (res.ok) {
+                     // 成功会自动刷新列表
+                 } else {
+                     const err = await res.json();
+                     alert('恢复任务失败: ' + err.message);
+                     btn.innerHTML = originalHtml;
+                     btn.disabled = false;
+                 }
+             } catch (e) {
+                 alert('网络请求失败');
+                 btn.innerHTML = originalHtml;
+                 btn.disabled = false;
+             }
+        }
+
+        async function deleteCancelledTask(messageId) {
+             if(!confirm("⚠️ 警告：这将彻底删除该任务及其已下载的临时分片文件，此操作不可撤销！\n\n确定要继续吗？")) return;
+
+             const btn = event.currentTarget;
+             const originalHtml = btn.innerHTML;
+             btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+             btn.disabled = true;
+
+             try {
+                 const res = await fetch(`/api/task/cancelled/${messageId}`, { method: 'DELETE' });
+                 if (res.ok) {
+                     // 成功会自动刷新列表
+                 } else {
+                     const err = await res.json();
+                     alert('删除失败: ' + err.message);
+                     btn.innerHTML = originalHtml;
+                     btn.disabled = false;
+                 }
+             } catch (e) {
+                 alert('网络请求失败');
+                 btn.innerHTML = originalHtml;
+                 btn.disabled = false;
+             }
+         }
+    </script>
+</body>
+</html>
