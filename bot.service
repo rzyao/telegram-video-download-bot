@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram Video Downloader Bot
+After=network.target
+
+[Service]
+# 修改为实际用户
+User=root
+# 修改为实际路径
+WorkingDirectory=/opt/telegram-bot
+ExecStart=/usr/bin/python3 /opt/telegram-bot/main.py
+Restart=always
+RestartSec=10
+# 环境变量
+Environment="HEADLESS=true"
+Environment="TG_DOWNLOAD_DIR=/mnt/downloads"
+
+[Install]
+WantedBy=multi-user.target

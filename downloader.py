@@ -99,6 +99,11 @@ class TelethonDownloader:
         
         # 确保目录存在
         Config.ensure_directories()
+        
+        # 实时状态 (用于外部查询)
+        self.current_speed = 0.0
+        self.current_percent = 0.0
+        self.current_eta = "N/A"
 
     async def _ensure_workers_ready(self):
         """确保 Worker 客户端池就绪（延迟初始化）"""
@@ -468,59 +473,53 @@ class TelethonDownloader:
         
         logger.info(f"✅ 下载完成: {task.file_name}")
         logger.info(f"📂 {file_path}")
+        
+        # 发送完成通知 (仅当 task.message 存在且有效时)
+        if task.message:
+            try:
+                # 计算耗时
+                start_time = datetime.fromisoformat(task.created_at) if task.created_at else datetime.now()
+                # 简单计算耗时 (不精确，仅供参考)
+                duration = datetime.now() - start_time
+                duration_str = str(duration).split('.')[0]
+                
+                msg = (
+                    f"✅ **下载完成**\n\n"
+                    f"📄 `{task.file_name}`\n"
+                    f"📂大小: {task.file_size/1024/1024:.2f} MB\n"
+                    f"⏱耗时: {duration_str}"
+                )
+                await task.message.reply(msg)
+            except Exception as e:
+                logger.error(f"❌ 发送通知失败: {e}")
+
+            await asyncio.sleep(0.2)
 
     async def monitor_progress(self, task, num_parts, stop_event):
-        """进度监控面板 - 实时刷新显示"""
+        """进度监控面板 (支持 Headless 模式)"""
         total_size = task.file_size
         last_bytes = 0
         last_time = time.time()
         speed = 0
-        first_print = True
         
-        # 预留行数
-        LINES_COUNT = 5
+        # Headless 模式下，最后一次日志的时间
+        last_log_time = 0
         
         while not stop_event.is_set():
-            # 统计各状态 - 直接从 part_status 读取
-            completed = 0
-            downloading = 0
-            waiting = 0
-            pending = 0
-            downloading_list = []
-            
-            for i in range(num_parts):
-                status = self.part_status.get(i, 'pending')
-                if status == 'completed':
-                    completed += 1
-                elif status == 'downloading':
-                    downloading += 1
-                    # 获取该分片的进度
-                    current = self.active_parts.get(i, 0)
-                    p_data = task.parts[i]
-                    expected = p_data['end_offset'] - p_data['start_offset'] + 1
-                    pct = min(100, (current / expected * 100)) if expected > 0 else 0
-                    downloading_list.append(f"P{i}:{pct:.0f}%")
-                elif status == 'waiting':
-                    waiting += 1
-                    downloading_list.append(f"P{i}:⏳")
-                else:
-                    pending += 1
-            
-            # 计算进度和速度
+            # 1. 计算通用统计数据
             total_downloaded = sum(self.active_parts.values())
             now = time.time()
             elapsed = now - last_time
+            
+            # 计算瞬时速度
             if elapsed >= 0.5:
                 speed = (total_downloaded - last_bytes) / elapsed
+                self.current_speed = speed # Update global state
                 last_bytes = total_downloaded
                 last_time = now
             
             percent = min(100, (total_downloaded / total_size * 100)) if total_size > 0 else 0
-            
-            # 进度条
-            bar_len = 30
-            filled = int(bar_len * percent / 100)
-            bar = '█' * filled + '░' * (bar_len - filled)
+            self.current_percent = percent
             
             # ETA
             eta = "--:--"
@@ -530,32 +529,106 @@ class TelethonDownloader:
                     eta = f"{int(remaining//60):02d}:{int(remaining%60):02d}"
                 else:
                     eta = f"{int(remaining//3600)}h{int((remaining%3600)//60):02d}m"
+            self.current_eta = eta
             
-            # 活跃分片（最多6个）
-            active_str = ' '.join(downloading_list[:6])
-            if len(downloading_list) > 6:
-                active_str += '...'
-            
-            # 显示内容
-            # 使用 ANSI 转义序列 \033[K 清除当前行
-            lines = [
-                f"{'═'*60}",
-                f"  [{bar}] {percent:5.1f}%",
-                f"  📥 {total_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB | ⚡ {speed/1024/1024:.2f} MB/s | ETA: {eta}",
-                f"  ✅{completed} ⬇️{downloading} ⏳{waiting} 📋{pending}  |  {active_str}",
-                f"{'═'*60}"
-            ]
-            
-            # 刷新显示
-            if not first_print:
-                # 移动光标上移 N 行
-                print(f"\033[{LINES_COUNT}A", end="", flush=True)
-            
-            for line in lines:
-                # \033[2K 清除整行, \r 回到行首
-                print(f"\033[2K\r{line}", flush=True)
+            # 2. 分支处理：Headless vs Interactive
+            if Config.HEADLESS:
+                # 定时日志 (避免刷屏)
+                if now - last_log_time >= Config.LOG_INTERVAL:
+                    # 统计分片状态
+                    completed_count = sum(1 for s in self.part_status.values() if s == 'completed')
+                    downloading_count = sum(1 for s in self.part_status.values() if s == 'downloading')
+                    
+                    log_msg = (
+                        f"📈 进度: {percent:5.1f}% | "
+                        f"📥 {total_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB | "
+                        f"⚡ {speed/1024/1024:.2f} MB/s | "
+                        f"分片: ✅{completed_count} ⬇️{downloading_count} | ETA: {eta}"
+                    )
+                    logger.info(log_msg)
+                    last_log_time = now
                 
-            first_print = False
+                # Check less frequently in headless mode
+                await asyncio.sleep(1)
+                
+            else:
+                # === 原有的 ANSI 进度条逻辑 ===
+                # 统计各状态
+                completed = 0
+                downloading = 0
+                waiting = 0
+                pending = 0
+                downloading_list = []
+                
+                for i in range(num_parts):
+                    status = self.part_status.get(i, 'pending')
+                    if status == 'completed':
+                        completed += 1
+                    elif status == 'downloading':
+                        downloading += 1
+                        current = self.active_parts.get(i, 0)
+                        p_data = task.parts[i]
+                        expected = p_data['end_offset'] - p_data['start_offset'] + 1
+                        pct = min(100, (current / expected * 100)) if expected > 0 else 0
+                        downloading_list.append(f"P{i}:{pct:.0f}%")
+                    elif status == 'waiting':
+                        waiting += 1
+                        downloading_list.append(f"P{i}:⏳")
+                    else:
+                        pending += 1
+                
+                # 进度条
+                bar_len = 30
+                filled = int(bar_len * percent / 100)
+                bar = '█' * filled + '░' * (bar_len - filled)
+                
+                # 活跃分片（最多6个）
+                active_str = ' '.join(downloading_list[:6])
+                if len(downloading_list) > 6:
+                    active_str += '...'
+                
+                lines = [
+                    f"{'═'*60}",
+                    f"  [{bar}] {percent:5.1f}%",
+                    f"  📥 {total_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB | ⚡ {speed/1024/1024:.2f} MB/s | ETA: {eta}",
+                    f"  ✅{completed} ⬇️{downloading} ⏳{waiting} 📋{pending}  |  {active_str}",
+                    f"{'═'*60}"
+                ]
+                
+                # 刷新显示 (移动光标逻辑)
+                LINES_COUNT = 5
+                monitor_attr_name = '_monitor_initialized'
+                
+                # 首次打印不移动光标
+                if not getattr(self, monitor_attr_name, False):
+                    setattr(self, monitor_attr_name, True)
+                else:
+                    print(f"\033[{LINES_COUNT}A", end="", flush=True)
+                
+                for line in lines:
+                    print(f"\033[2K\r{line}", flush=True)
+                    
+                await asyncio.sleep(0.2)
+
+    def get_status_text(self):
+        """获取当前状态文本 (供 Bot 命令使用)"""
+        status_lines = []
+        
+        # 1. 运行状态
+        status_lines.append(f"🟢 服务状态: {'运行中' if self.is_running else '空闲中'}")
+        status_lines.append(f"📋 等待队列: {len(self.tasks)} 个任务")
+        
+        # 2. 当前任务
+        if self.current_task:
+            t = self.current_task
+            status_lines.append(f"\n🚀 正在下载:")
+            status_lines.append(f"📄 {t.file_name}")
+            status_lines.append(f"📊 进度: {self.current_percent:.1f}%")
+            status_lines.append(f"📥 大小: {t.file_size/1024/1024:.2f} MB")
+            status_lines.append(f"⚡ 速度: {self.current_speed/1024/1024:.2f} MB/s")
+            status_lines.append(f"⏱ 剩余: {self.current_eta}")
+        else:
+            status_lines.append("\n💤 当前无下载任务")
             
-            await asyncio.sleep(0.2)
+        return "\n".join(status_lines)
 

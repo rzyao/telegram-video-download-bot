@@ -6,7 +6,6 @@ import asyncio
 import logging
 from telethon import TelegramClient, events
 from config import Config
-from config import Config
 from downloader import TelethonDownloader
 
 # 配置日志
@@ -52,6 +51,31 @@ async def handler(event):
     logger.info(f"📨 收到消息 ID: {message.id}")
     
     target_msg = message
+
+    # 0. 检查是否为指令 (仅处理文本消息)
+    if message.text and message.text.startswith('/'):
+        cmd = message.text.strip().split()[0].lower()
+        logger.info(f"🤖 收到指令: {cmd}")
+        
+        if cmd == '/ping':
+            await message.reply("Pong! 🚀 服务在线")
+            return
+            
+        if cmd == '/status':
+            status_text = downloader.get_status_text()
+            await message.reply(status_text)
+            return
+            
+        if cmd == '/help':
+            help_text = (
+                "🤖 **Telegram 下载助手**\n\n"
+                "/ping - 检查服务连通性\n"
+                "/status - 查看当前下载任务与队列\n"
+                "/help - 显示此帮助\n\n"
+                "直接转发视频或发送 t.me 链接即可开始下载。"
+            )
+            await message.reply(help_text)
+            return
     
     # 检查是否包含媒体
     if not message.media:

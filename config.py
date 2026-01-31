@@ -8,10 +8,12 @@ class Config:
     """配置类，集中管理所有配置项"""
     
     # ==================== Telegram API ====================
-    # 使用 Telegram Desktop 官方 API ID (配合 Windows 伪装，权限最高)
-    API_ID = 2040
-    API_HASH = "b18441a1ff607e10a989891a5462e627"
-    SESSION_NAME = "telethon_session"
+    # ==================== Telegram API ====================
+    # 默认使用 Telegram Desktop 官方 API ID (配合 Windows 伪装，权限最高)
+    # 也可以通过环境变量覆盖
+    API_ID = int(os.getenv("TG_API_ID", "2040"))
+    API_HASH = os.getenv("TG_API_HASH", "b18441a1ff607e10a989891a5462e627")
+    SESSION_NAME = os.getenv("TG_SESSION_NAME", "telethon_session")
     
     # 旧配置备份
     # API_ID = int(os.getenv("TG_API_ID", "36348713"))
@@ -54,10 +56,14 @@ class Config:
     RETRY_DELAY_BASE = 5      # 基础重试间隔（秒）
     RETRY_DELAY_MAX = 60      # 最大重试间隔（秒）
     
-    # ==================== 日志配置 ====================
+    # ==================== 日志与后台运行配置 ====================
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE = os.getenv("LOG_FILE", "tg_downloader.log")
     
+    # Headless 模式：适合后台运行，禁用进度条，改为定时日志
+    HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
+    # Headless 模式下日志打印间隔（秒）
+    LOG_INTERVAL = int(os.getenv("LOG_INTERVAL", "30"))    
     @classmethod
     def ensure_directories(cls):
         """确保必要的目录存在"""
