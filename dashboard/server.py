@@ -84,7 +84,9 @@ async def read_root(request: Request):
     """智能重定向：根据系统状态决定去向"""
     # 状态 1: 未完成初始化
     if not Config.SETUP_COMPLETED:
-        return templates.TemplateResponse("setup.html", {"request": request, "defaults": Config.to_dict()})
+        conf = Config.to_dict()
+        logger.info(f"🔍 正在渲染 setup.html, 默认下载目录: {conf.get('directories.download_dir')}")
+        return templates.TemplateResponse("setup.html", {"request": request, "defaults": conf})
     
     # 状态 2: 已初始化但未登录
     session_file = f"{Config.SESSION_NAME}.session"
@@ -97,7 +99,9 @@ async def read_root(request: Request):
 @app.get("/setup.html", response_class=HTMLResponse)
 async def setup_page(request: Request):
     """系统配置页面"""
-    return templates.TemplateResponse("setup.html", {"request": request, "defaults": Config.to_dict()})
+    conf = Config.to_dict()
+    logger.info(f"🔍 访问 setup_page, 注入数据: {conf.get('directories.download_dir')}")
+    return templates.TemplateResponse("setup.html", {"request": request, "defaults": conf})
 
 @app.get("/login.html", response_class=HTMLResponse)
 async def login_page(request: Request):

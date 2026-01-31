@@ -290,15 +290,15 @@ class TelethonDownloader:
         except Exception as e:
             logger.error(f"❌ 保存进度失败: {e}")
 
-    async def stop(self):
-        """完全停止下载器"""
-        self.is_running = False
-        self.cancel_event.set()
-        
-        # 保存当前任务状态
-        if self.current_task:
-            logger.info("🛑 正在保存当前任务状态...")
-            self._save_task(self.current_task)
+        # 取消主队列任务
+        if self.queue_task and not self.queue_task.done():
+            logger.info("🛑 正在取消主任务队列...")
+            self.queue_task.cancel()
+            try:
+                await self.queue_task
+            except asyncio.CancelledError:
+                pass
+            self.queue_task = None
             
         # 强制清理 worker 以中断网络连接
         await self._cleanup_workers()
@@ -307,6 +307,7 @@ class TelethonDownloader:
         """处理任务队列"""
         if self.is_running: return
         self.is_running = True
+        self.queue_task = asyncio.current_task()
         
         while self.tasks:
             self.current_task = self.tasks.popleft()
