@@ -32,11 +32,11 @@
                 <div class="grid grid-cols-2 gap-4">
                     <div class="col-span-1">
                         <label class="block text-xs font-medium text-gray-500 mb-1">API ID</label>
-                        <input type="number" name="telegram.api_id" value="2040" required class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="number" name="telegram.api_id" value="{{ defaults['telegram.api_id'] if defaults else '2040' }}" required class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div class="col-span-1">
                         <label class="block text-xs font-medium text-gray-500 mb-1">API Hash</label>
-                        <input type="text" name="telegram.api_hash" value="b18441a1ff607e10a989891a5462e627" required class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" name="telegram.api_hash" value="{{ defaults['telegram.api_hash'] if defaults else 'b18441a1ff607e10a989891a5462e627' }}" required class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                 </div>
             </div>
@@ -51,7 +51,10 @@
                     <label class="block text-xs font-medium text-gray-500 mb-1">下载目录 (绝对路径)</label>
                     <div class="relative">
                         <i class="fa-solid fa-folder absolute left-3 top-2.5 text-gray-400 text-sm"></i>
-                        <input type="text" name="directories.download_dir" placeholder="D:/tg_downloads" required class="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" name="directories.download_dir" 
+                               placeholder="{{ defaults['directories.download_dir'] if defaults else 'downloads' }}" 
+                               value="{{ defaults['directories.download_dir'] if defaults else '' }}"
+                               required class="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                 </div>
             </div>
@@ -64,7 +67,7 @@
                 </div>
                 <div class="flex items-center gap-3 mb-2">
                      <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" name="proxy.enable" class="sr-only peer" onchange="toggleProxy(this)">
+                        <input type="checkbox" name="proxy.enable" id="proxy-enable" class="sr-only peer" onchange="toggleProxy(this)" {{ 'checked' if defaults and defaults['proxy.enable'] else '' }}>
                         <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                         <span class="ml-2 text-sm font-medium text-gray-700">启用代理</span>
                     </label>
@@ -72,15 +75,15 @@
                 <div id="proxy-settings" class="grid grid-cols-12 gap-3 opacity-50 pointer-events-none transition-opacity">
                      <div class="col-span-3">
                         <select name="proxy.scheme" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-sm">
-                            <option value="socks5">SOCKS5</option>
-                            <option value="http">HTTP</option>
+                            <option value="socks5" {{ 'selected' if defaults and defaults['proxy.scheme'] == 'socks5' else '' }}>SOCKS5</option>
+                            <option value="http" {{ 'selected' if defaults and defaults['proxy.scheme'] == 'http' else '' }}>HTTP</option>
                         </select>
                      </div>
                      <div class="col-span-6">
-                        <input type="text" name="proxy.host" placeholder="127.0.0.1" value="127.0.0.1" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                        <input type="text" name="proxy.host" placeholder="127.0.0.1" value="{{ defaults['proxy.host'] if defaults else '127.0.0.1' }}" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm">
                      </div>
                      <div class="col-span-3">
-                        <input type="number" name="proxy.port" placeholder="1080" value="1080" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                        <input type="number" name="proxy.port" placeholder="1080" value="{{ defaults['proxy.port'] if defaults else '1080' }}" class="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm">
                      </div>
                 </div>
             </div>
@@ -103,6 +106,12 @@
                 settings.classList.add('opacity-50', 'pointer-events-none');
             }
         }
+
+        // 初始化代理设置状态
+        window.addEventListener('DOMContentLoaded', () => {
+            const proxyEnable = document.getElementById('proxy-enable');
+            if (proxyEnable) toggleProxy(proxyEnable);
+        });
 
         async function submitSetup(e) {
             e.preventDefault();

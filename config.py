@@ -11,7 +11,7 @@ class Config:
         "telegram.api_hash": "b18441a1ff607e10a989891a5462e627",
         "telegram.session_name": "telethon_session",
         
-        "directories.download_dir": "D:/tg_downloads" if os.name == 'nt' else "/app/downloads",
+        "directories.download_dir": "downloads" if os.name == 'nt' else "/app/downloads",
         "directories.data_dir": "data" if os.name != 'nt' else "data", 
         "directories.temp_dir": "", # Will be derived
         
@@ -127,6 +127,11 @@ class Config:
     @classmethod
     def get(cls, key, default=None):
         return cls._settings.get(key, default)
+
+    @classmethod
+    def to_dict(cls):
+        """返回当前所有配置的字典备份"""
+        return cls._settings.copy()
 
     @classmethod
     def reload(cls):
