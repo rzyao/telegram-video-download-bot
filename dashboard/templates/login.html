@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram 登录 - Telegram Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>body { font-family: 'Inter', sans-serif; }</style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen flex items-center justify-center">
+
+    <div class="max-w-md w-full mx-4 bg-white rounded-2xl shadow-xl overflow-hidden">
+        <div class="bg-blue-600 px-8 py-6 text-white text-center">
+            <div class="h-16 w-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
+                <i class="fa-brands fa-telegram text-3xl"></i>
+            </div>
+            <h1 class="text-2xl font-bold">Telegram 登录</h1>
+            <p class="text-blue-100 text-sm mt-1">请验证您的账号以开始下载</p>
+        </div>
+
+        <div class="p-8 space-y-6">
+            <!-- Loading Overlay -->
+            <div id="loading-overlay" class="hidden absolute inset-0 bg-white/50 backdrop-blur-sm flex items-center justify-center z-10">
+                <i class="fa-solid fa-circle-notch fa-spin text-blue-600 text-3xl"></i>
+            </div>
+
+            <div id="login-container" class="space-y-6">
+                <!-- Phone Number Input -->
+                <div id="phone-step">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">手机号（国际格式）</label>
+                    <div class="flex gap-2">
+                        <div class="relative flex-1">
+                            <i class="fa-solid fa-mobile-screen-button absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                            <input type="tel" id="phone-input" placeholder="+86 138****" class="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <button type="button" onclick="sendCode()" id="send-code-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap transition-colors">
+                            发送验证码
+                        </button>
+                    </div>
+                    <p class="text-[10px] text-gray-400 mt-1">如 +86 13812345678</p>
+                </div>
+
+                <!-- Verification Code -->
+                <div id="code-step" class="hidden space-y-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">验证码</label>
+                        <div class="relative">
+                            <i class="fa-solid fa-key absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                            <input type="text" id="code-input" placeholder="12345" maxlength="10" class="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+
+                    <!-- 2FA Password -->
+                    <div id="password-step" class="hidden">
+                        <label class="block text-xs font-medium text-gray-500 mb-1">两步验证密码</label>
+                        <div class="relative">
+                            <i class="fa-solid fa-lock absolute left-3 top-2.5 text-gray-400 text-sm"></i>
+                            <input type="password" id="password-input" placeholder="您的云密码" class="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+
+                    <button type="button" onclick="signIn()" id="login-btn" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-xl shadow-lg shadow-green-500/20 transition-all font-bold">
+                        确认登录
+                    </button>
+                </div>
+
+                <!-- Success State -->
+                <div id="login-success" class="hidden text-center space-y-4 py-4">
+                    <div class="h-16 w-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto">
+                        <i class="fa-solid fa-check text-3xl"></i>
+                    </div>
+                    <div class="space-y-1">
+                        <h2 class="text-lg font-bold text-gray-800">登录成功</h2>
+                        <p class="text-sm text-gray-500">正在为您跳转至控制面板...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Link back to setup if needed -->
+            <div class="text-center pt-4 border-t">
+                <a href="/setup.html" class="text-xs text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-gear"></i> 修改系统配置
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function sendCode() {
+            const phone = document.getElementById('phone-input').value.trim();
+            const btn = document.getElementById('send-code-btn');
+            if (!phone) return alert('请输入手机号');
+            
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/telegram/send_code?force_recreate=true', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ phone })
+                });
+                
+                if (res.ok) {
+                    document.getElementById('code-step').classList.remove('hidden');
+                    btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                    btn.classList.replace('bg-blue-600', 'bg-gray-400');
+                } else {
+                    const err = await res.json();
+                    alert('发送失败: ' + err.error);
+                    btn.innerHTML = '重试';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('网络错误');
+                btn.disabled = false;
+            }
+        }
+
+        async function signIn() {
+            const code = document.getElementById('code-input').value.trim();
+            const password = document.getElementById('password-input').value.trim();
+            const btn = document.getElementById('login-btn');
+            
+            if (!code) return alert('请输入验证码');
+            
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 正在验证...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/telegram/sign_in', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ code, password })
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    document.getElementById('code-step').classList.add('hidden');
+                    document.getElementById('phone-step').classList.add('hidden');
+                    document.getElementById('login-success').classList.remove('hidden');
+                    setTimeout(() => window.location.href = '/', 1500);
+                } else {
+                    if (data.need_password) {
+                        document.getElementById('password-step').classList.remove('hidden');
+                        btn.innerHTML = '确认登录';
+                        btn.disabled = false;
+                    } else {
+                        alert('登录失败: ' + data.error);
+                        btn.disabled = false;
+                    }
+                }
+            } catch (e) {
+                alert('网络错误');
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

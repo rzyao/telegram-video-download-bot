@@ -354,6 +354,9 @@
                         startBtn.classList.remove('hidden');
                         reloginBtn.classList.remove('hidden');
                     }
+                } else {
+                    // 核心修复：连接成功后自动隐藏横幅
+                    banner.classList.add('hidden');
                 }
             } catch (e) {
                 console.error('Failed to check bot status:', e);
@@ -361,15 +364,15 @@
         }
 
         function reLogin() {
-            if (confirm('重新登录将删除当前 Session，是否继续？\n\n删除后请访问初始化页面完成登录')) {
+            if (confirm('重新登录将删除当前 Session，是否继续？')) {
                 // 删除旧 Session
                 fetch('/api/telegram/session', { method: 'DELETE' })
                     .then(() => {
                         // 添加延迟确保文件删除完成
                         setTimeout(() => {
-                            alert('✅ Session 已删除，即将跳转到初始化页面...');
-                            // 强制跳转到 setup 页面（添加时间戳避免缓存）
-                            window.location.href = '/setup.html?t=' + Date.now();
+                            alert('✅ Session 已删除，即将跳转到登录页面...');
+                            // 强制跳转到登录页面
+                            window.location.href = '/login.html?t=' + Date.now();
                         }, 500);
                     })
                     .catch(err => {
@@ -625,11 +628,13 @@
 
         // Loopers
         setInterval(updateStatus, 1000);
+        setInterval(checkBotStatus, 3000); // 每 3 秒检查一次连接状态
         setInterval(updateSystemStats, 2000); // System stats every 2s
         setInterval(updateLogs, 1000);      // Logs every 1s
         
         // Initial call
         updateStatus();
+        checkBotStatus();
         updateSystemStats();
         updateLogs();
 

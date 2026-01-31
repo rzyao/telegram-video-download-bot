@@ -47,6 +47,12 @@ logging.getLogger().addHandler(mem_handler)
 # 模块自引用（用于访问模块级变量）
 import sys
 server = sys.modules[__name__]
+# 注入的主模块引用
+main_module = None 
+
+def _get_main():
+    """获取正确的主模块实例"""
+    return getattr(server, 'main_module', None) or sys.modules.get('main')
 
 # 全局 Telegram 登录状态（用于 Web 向导）
 telegram_login_state = {
@@ -75,15 +81,28 @@ def set_downloader(downloader):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    """渲染主页"""
+    """智能重定向：根据系统状态决定去向"""
+    # 状态 1: 未完成初始化
     if not Config.SETUP_COMPLETED:
         return templates.TemplateResponse("setup.html", {"request": request})
+    
+    # 状态 2: 已初始化但未登录
+    session_file = f"{Config.SESSION_NAME}.session"
+    if not os.path.exists(session_file):
+        return templates.TemplateResponse("login.html", {"request": request})
+    
+    # 状态 3: 正常进入主页
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/setup.html", response_class=HTMLResponse)
 async def setup_page(request: Request):
-    """强制显示初始化页面（用于重新登录）"""
+    """系统配置页面"""
     return templates.TemplateResponse("setup.html", {"request": request})
+
+@app.get("/login.html", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Telegram 登录页面"""
+    return templates.TemplateResponse("login.html", {"request": request})
 
 @app.get("/api/system")
 async def get_system_stats():
@@ -209,11 +228,27 @@ async def restart_bot():
 @app.get("/api/telegram/status")
 async def telegram_status():
     """检查 Telegram Session 状态"""
+    main = _get_main()
     session_file = f"{Config.SESSION_NAME}.session"
-    logged_in = os.path.exists(session_file)
+    session_exists = os.path.exists(session_file)
+    
+    # 检查 Client 是否真正连接且授权
+    logged_in = False
+    connected = False
+    if main and main.client and main.client.is_connected():
+        connected = main.client_connected
+        try:
+            # 只有当 client 已经建立连接并成功授权时，才认为已登录
+            logged_in = await main.client.is_user_authorized()
+        except:
+            logged_in = False
+    elif session_exists:
+        # 如果文件存在但 client 还没启动，先认为已登录（前端会显示加载或等待启动）
+        logged_in = True
     
     return {
         "logged_in": logged_in,
+        "connected": connected,
         "session_file": session_file
     }
 
@@ -225,8 +260,9 @@ async def bot_status():
     # 使用传递的 main 模块引用获取状态
     client_connected = False
     try:
-        if hasattr(server, 'main_module'):
-            c = server.main_module.get_client()
+        main = _get_main()
+        if main:
+            c = main.get_client()
             if c is not None and c.is_connected():
                 client_connected = True
     except Exception as e:
@@ -246,7 +282,9 @@ async def start_bot_manually():
         return JSONResponse(status_code=400, content={"error": "请先完成 Telegram 登录"})
     
     try:
-        import main
+        main = _get_main()
+        if not main:
+             return JSONResponse(status_code=500, content={"error": "主模块未就绪"})
         # 启动 Bot 任务
         asyncio.create_task(main.start_telegram_bot())
         logger.info("🤖 手动启动 Bot 任务已创建")
@@ -258,7 +296,9 @@ async def start_bot_manually():
 @app.delete("/api/telegram/session")
 async def delete_session():
     """删除当前 Telegram Session（用于重新登录）"""
-    import main
+    main = _get_main()
+    if not main:
+        return JSONResponse(status_code=500, content={"error": "主模块未就绪"})
     session_file = f"{Config.SESSION_NAME}.session"
     
     try:
@@ -302,7 +342,9 @@ async def delete_session():
 @app.post("/api/telegram/send_code")
 async def send_code(req: CodeRequest):
     """发送 Telegram 验证码"""
-    import main
+    main = _get_main()
+    if not main:
+        return JSONResponse(status_code=500, content={"error": "主模块未就绪"})
     
     try:
         # 确保 Client 存在
@@ -330,7 +372,9 @@ async def send_code(req: CodeRequest):
 @app.post("/api/telegram/sign_in")
 async def sign_in(req: SignInRequest):
     """Telegram 登录验证"""
-    import main
+    main = _get_main()
+    if not main:
+        return JSONResponse(status_code=500, content={"error": "主模块未就绪"})
     
     phone = telegram_login_state.get("phone")
     phone_code_hash = telegram_login_state.get("phone_code_hash")
@@ -348,6 +392,10 @@ async def sign_in(req: SignInRequest):
         # 清除临时状态
         telegram_login_state.clear()
         
+        # 核心修复：登录成功后立即启动 Bot 任务
+        asyncio.create_task(main.start_telegram_bot())
+        logger.info("🤖 登录成功，已自动启动 Bot 任务")
+        
         return {"status": "ok", "message": "登录成功"}
         
     except SessionPasswordNeededError:
@@ -357,6 +405,11 @@ async def sign_in(req: SignInRequest):
                 await client.sign_in(password=req.password)
                 logger.info(f"✅ 两步验证成功: {phone}")
                 telegram_login_state.clear()
+                
+                # 核心修复：登录成功后立即启动 Bot 任务
+                asyncio.create_task(main.start_telegram_bot())
+                logger.info("🤖 两步验证成功，已自动启动 Bot 任务")
+                
                 return {"status": "ok", "message": "登录成功"}
             except Exception as e:
                 logger.error(f"两步验证失败: {e}")
