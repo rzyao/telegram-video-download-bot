@@ -7,8 +7,15 @@ from datetime import datetime
 
 logger = logging.getLogger("Database")
 
-# 硬编码数据库名，它是唯一的数据源
-DB_PATH = "bot_data.db"
+# 数据库保存路径，优先保存到 data 目录以便 Docker 挂载
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except:
+        pass
+
+DB_PATH = os.path.join(DATA_DIR, "bot_data.db") if os.path.exists(DATA_DIR) else "bot_data.db"
 
 async def init_db():
     """初始化数据库"""

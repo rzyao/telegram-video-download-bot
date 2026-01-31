@@ -11,7 +11,8 @@ class Config:
         "telegram.api_hash": "b18441a1ff607e10a989891a5462e627",
         "telegram.session_name": "telethon_session",
         
-        "directories.download_dir": "D:/tg_downloads" if os.name == 'nt' else "/mnt/downloads",
+        "directories.download_dir": "D:/tg_downloads" if os.name == 'nt' else "/app/downloads",
+        "directories.data_dir": "data" if os.name != 'nt' else "data", 
         "directories.temp_dir": "", # Will be derived
         
         "proxy.enable": False,
@@ -75,7 +76,14 @@ class Config:
         # 刷新属性
         cls.API_ID = int(cls.get("telegram.api_id"))
         cls.API_HASH = cls.get("telegram.api_hash")
-        cls.SESSION_NAME = cls.get("telegram.session_name")
+        
+        # 确保 Session 文件保存在 data 目录
+        data_dir = cls.get("directories.data_dir", "data")
+        session_base = cls.get("telegram.session_name", "telethon_session")
+        if not os.path.isabs(session_base):
+            cls.SESSION_NAME = os.path.join(data_dir, session_base)
+        else:
+            cls.SESSION_NAME = session_base
         
         cls.DOWNLOAD_DIR = cls.get("directories.download_dir")
         
@@ -144,6 +152,14 @@ class Config:
                 os.makedirs(cls.TEMP_DIR, exist_ok=True)
             except Exception as e:
                 print(f"创建临时目录失败: {e}")
+
+        # 确保数据目录存在
+        data_dir = cls.get("directories.data_dir", "data")
+        if data_dir and not os.path.exists(data_dir):
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+            except Exception as e:
+                print(f"创建数据目录失败: {e}")
 
 # 模块加载时自动执行一次配置加载
 Config.load()

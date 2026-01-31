@@ -1,21 +1,22 @@
 version: '3.8'
 
 services:
-  bot:
+  tg-downloader:
     build: .
     container_name: tg-downloader
     restart: unless-stopped
-    environment:
-      - TG_API_ID=${TG_API_ID}
-      - TG_API_HASH=${TG_API_HASH}
-      - TG_SESSION_NAME=telethon_session
-      - TG_DOWNLOAD_DIR=/downloads
-      - HEADLESS=true
-      - USE_PROXY=${USE_PROXY:-false}
-      - PROXY_HOST=${PROXY_HOST}
-      - PROXY_PORT=${PROXY_PORT}
+    ports:
+      - "8000:8000"  # Dashboard Interface
     volumes:
-      - ./data:/app/data  # 存放 session 文件
-      - ./downloads:/downloads # 存放下载文件
-    # 如果需要代理，可以使用 host 网络或 links
-    # network_mode: host 
+      # ⚠️ 请修改左侧路径为您的实际下载目录
+      - /path/to/your/downloads:/app/downloads
+      
+      # 数据持久化 (使用 Docker 命名卷)
+      - tg_bot_data:/app/data
+      
+    environment:
+      - TZ=Asia/Shanghai
+    stdin_open: true # Interactions might be needed initially
+    tty: true
+volumes:
+  tg_bot_data:

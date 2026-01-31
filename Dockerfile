@@ -2,20 +2,28 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# 安装系统依赖 (如有需)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
     iputils-ping \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Python 依赖
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制代码
+# Copy application code
 COPY . .
 
-# 设置环境变量
-ENV HEADLESS=true
+# Create volume checkpoints
+VOLUME ["/app/downloads", "/app/data"]
+
+# Expose Dashboard port
+EXPOSE 8000
+
+# Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV TZ=Asia/Shanghai
 
 CMD ["python", "main.py"]
