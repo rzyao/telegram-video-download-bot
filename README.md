@@ -24,14 +24,14 @@
 在项目根目录下，直接运行：
 
 ```bash
-docker compose up -d --build
+HTTPS_PROXY="socks5://192.168.50.2:10088" docker compose up -d --build
 ```
 
 ### 2. 访问控制面板
 
 启动成功后，在浏览器访问：
 
-> **http://localhost:8000**
+> **http://localhost:9595**
 
 ### 3. 初始化配置 (Setup)
 

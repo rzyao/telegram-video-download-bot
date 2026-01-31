@@ -20,7 +20,7 @@ COPY . .
 VOLUME ["/app/downloads", "/app/data"]
 
 # Expose Dashboard port
-EXPOSE 8000
+EXPOSE 9595
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1

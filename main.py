@@ -248,7 +248,7 @@ async def main():
     
     if not Config.SETUP_COMPLETED:
         logger.info("📋 首次启动检测到，请访问 Dashboard 完成初始化")
-        logger.info("💡 初始化向导: http://localhost:8000")
+        logger.info("💡 初始化向导: http://localhost:9595")
     elif not session_exists:
         logger.info("🔐 配置已完成，但未检测到 Telegram Session")
         logger.info("💡 请访问 Dashboard 完成 Telegram 登录")

@@ -25,7 +25,7 @@ class Config:
         
         "dashboard.enable": True,
         "dashboard.host": "0.0.0.0",
-        "dashboard.port": 8000,
+        "dashboard.port": 9595,
         
         "logging.file": "tg_downloader.log",
         "logging.headless": False,
@@ -48,7 +48,7 @@ class Config:
     MAX_WORKERS = 4
     WORKER_COUNT = 4
     DASHBOARD_HOST = "0.0.0.0"
-    DASHBOARD_PORT = 8000
+    DASHBOARD_PORT = 9595
     ENABLE_DASHBOARD = True
     SETUP_COMPLETED = False
     
