@@ -5,25 +5,16 @@ services:
     build: .
     container_name: tg-downloader
     restart: unless-stopped
-    ports:
-      - "9595:9595"  # Dashboard Interface
+    network_mode: host
     volumes:
       # ⚠️ 请修改左侧路径为您的实际下载目录
       - /mnt/nas/tg_downloads:/app/downloads
-      
       # 数据持久化 (使用 Docker 命名卷)
       - tg_bot_data:/app/data
-      
     environment:
       - TZ=Asia/Shanghai
     stdin_open: true # Interactions might be needed initially
     tty: true
-    networks:
-      - tg_net
-
-networks:
-  tg_net:
-    driver: bridge
 
 volumes:
   tg_bot_data:
